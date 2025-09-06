@@ -1,0 +1,43 @@
+paths:
+  openai_api_key_fpath: /home/ambati/.openai_api_key.zshrc      # path to OpenAI API key
+  data: /playpen-ssd/ambati/interact_plus/data/                 # path to data
+  experiments: /playpen-ssd/ambati/interact_plus/experiments/   # path to save experiment results
+
+# Model
+teacher:
+  model: gpt-4o
+  temperature: 0.3
+
+student:
+  model: mistral7
+  temperature: 0.3
+
+# Data & paths
+data:
+  data_amount: 100
+  opc_select_n: 2000
+  opc_seed: 4
+
+# Generation / evaluation
+gen:
+  k_values: [1, 5, 10]
+  num_samples: 10
+  pass_k: 5
+  pass_at_k_threshold: 0.75
+  retry_on_fail: 5
+  take_every: 3                 # only used for math dataset
+
+experiment:
+  name: test
+  cot: false
+  ood: false
+  dataset: math                 # code or math
+  assessment_turn: -1           # -1 (none), 1 (pre), 5 (mid)
+  start_from_turn: 1            # 1 (new), odd (student), even (teacher)
+  total_turns: 11
+  num_workers: 8
+
+hydra:
+  run:
+    dir: ${paths.experiments}/${experiment.name}/${teacher.model}/${student.model}/${experiment.dataset}
+  output_subdir: .

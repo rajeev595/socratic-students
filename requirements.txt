@@ -1,0 +1,12 @@
+# Core
+openai
+datasets
+tqdm
+hydra-core
+omegaconf
+
+# App / plotting
+streamlit
+altair
+pandas
+numpy
