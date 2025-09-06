@@ -51,12 +51,12 @@ configs/
 All scripts are configured through Hydra configs (configs/config.yaml).
 Important keys include:
 
-- paths.data → root data folder where curated sets are stored
-- paths.openai_api_key_fpath → text file with your OpenAI API key
-- teacher.model, teacher.temperature → teacher model settings
-- student.model, student.temperature → student model settings
-- gen.k_values, gen.num_samples, gen.pass_k, gen.pass_at_k_threshold
-- data.data_amount, data.opc_select_n, data.opc_seed
+- `paths.data` → root data folder where curated sets are stored
+- `paths.openai_api_key_fpath` → text file with your OpenAI API key
+- `teacher.model`, `teacher.temperature` → teacher model settings
+- `student.model`, `student.temperature` → student model settings
+- `gen.k_values`, `gen.num_samples`, `gen.pass_k`, `gen.pass_at_k_threshold`
+- `data.data_amount`, `data.opc_select_n`, `data.opc_seed`
 
 You can override parameters via command line, e.g.:
 ```bash
