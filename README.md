@@ -96,9 +96,9 @@ python -m codes.data.code.sample_hard student.model="qwen7" data.data_amount=50
         python -m codes.data.math.generate_ood
         ```
     These scripts map curated IDs to OOD counterparts and save to:
-        ```bash
-        <data>/<teacher.model>/<dataset>/<student.model>_ood.json
-        ```
+    ```bash
+    <data>/<teacher.model>/<dataset>/<student.model>_ood.json
+    ```
 
 3. Run interaction experiments
     ```bash
@@ -106,9 +106,9 @@ python -m codes.data.code.sample_hard student.model="qwen7" data.data_amount=50
     ```
     This launches a multi-turn student–teacher interaction loop with evaluation.
     Results are saved under:
-        ```bash
-        experiments/<teacher>/<student>/<dataset>/
-        ```
+    ```bash
+    experiments/<teacher>/<student>/<dataset>/
+    ```
 
 4. Visualize results
     ```bash
