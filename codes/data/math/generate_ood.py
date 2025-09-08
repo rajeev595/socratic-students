@@ -161,7 +161,7 @@ def main(cfg: DictConfig) -> None:
     # Load student's curated (in-distribution) math problem IDs
     with open(base_problems_path, "r") as f:
         base_json = json.load(f)
-    base_ids: List[int] = base_json["student_ids"]
+    base_ids: List[int] = [p["id"] for p in base_json["collected"]]
     logger.info("Loaded %d base IDs from %s", len(base_ids), base_problems_path)
 
     # Build base id -> alt=1 OOD mapping
