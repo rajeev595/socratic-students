@@ -28,8 +28,12 @@ class TranscriptEntry(TypedDict, total=False):
     turn: int
     content: str
 
-# ----- Set your experiments root here -----
-DEFAULT_EXP_ROOT = "/playpen-ssd/ambati/interact_plus/experiments/"
+# Project dir
+PROJ_DIR = "/playpen-ssd/ambati/interact_plus/"
+
+# Experiment and data dir
+DEFAULT_EXP_ROOT = str(Path(PROJ_DIR) / "experiments")
+DEFAULT_DATA_ROOT = str(Path(PROJ_DIR) / "data")
 
 # =========================
 # FS helpers & caching keys
@@ -185,6 +189,67 @@ def load_transcript(exp_dir: str, teacher: str, student: str, dataset: str, pid:
         return None
 
 # =========================
+# Data root helpers (for showing the question in Transcripts)
+# =========================
+
+def data_index_path(data_root: str, teacher: str, dataset: str, student: str) -> Path:
+    # data/<teacher>/<dataset>/<student>.json
+    return Path(data_root) / teacher / dataset / f"{student}.json"
+
+@st.cache_data(show_spinner=False, ttl=10)
+def load_problem_index(data_file: str, sig: FileSig) -> Dict[int, str]:
+    """
+    Load {id -> prompt} from the dataset index JSON:
+    {
+      "collected": [ {"id": 1117, "prompt": "...", "solution": ... }, ... ]
+    }
+    """
+    p = Path(data_file)
+    if not p.exists():
+        return {}
+    try:
+        with p.open("r", encoding="utf-8") as f:
+            obj = json.load(f)
+        items = obj.get("collected", [])
+        mapping: Dict[int, str] = {}
+        for it in items:
+            try:
+                mapping[int(it["id"])] = str(it["prompt"])
+            except Exception:
+                continue
+        return mapping
+    except Exception:
+        return {}
+
+def lookup_question(data_root: str, teacher: str, dataset: str, student: str, pid_str: str) -> Optional[str]:
+    p = data_index_path(data_root, teacher, dataset, student)
+    sig = file_signature(p)
+    if not sig.exists:
+        return None
+    index = load_problem_index(str(p), sig)
+    try:
+        pid_int = int(pid_str)
+    except Exception:
+        return None
+    return index.get(pid_int)
+
+# Detect if a question looks like a Python coding prompt/snippet (signature, imports, doctest, etc.)
+def looks_like_python_snippet(text: str) -> bool:
+    if not text:
+        return False
+    t = text.strip()
+    if "```" in t:
+        return True
+    # Quick markers for code-like prompts
+    if t.startswith(("def ", "class ", "from ", "import ")):
+        return True
+    markers = ["\ndef ", "\nclass ", " from ", " import ", ">>> ", "@dataclass", "if __name__ == '__main__':"]
+    score = sum(m in t for m in markers)
+    # Also count "codey" lines
+    codey_lines = sum(1 for ln in t.splitlines() if ln.strip().startswith(("def ", "class ", "from ", "import ", "#")) or ln.strip().endswith(":"))
+    return score >= 2 or codey_lines >= 2
+
+# =========================
 # Data shaping & plotting
 # =========================
 
@@ -253,33 +318,49 @@ def plot_passk(df: pd.DataFrame, k_val: int, student_colors: Dict[str, str], tit
             title=f"pass@{k_val} {title_suffix}".strip(), height=300
         )
 
-    # Color domain only for students present in this subset, with safe fallbacks
+    # Color domain only for students present, with safe fallbacks
     domain = sorted(sub["student"].unique().tolist())
     fallback = make_palette(len(domain))
     mapped = [student_colors.get(s, fallback[i]) for i, s in enumerate(domain)]
     color_scale = alt.Scale(domain=domain, range=mapped)
 
-    band = (
+    # Clamp into [0, 1] and lock axis domain
+    base = (
         alt.Chart(sub)
-        .transform_calculate(upper="datum.mean + datum.std", lower="datum.mean - datum.std")
-        .mark_area(opacity=0.2)
+        .transform_calculate(
+            mean_c="min(1, max(0, datum.mean))",
+            upper="min(1, max(0, datum.mean + datum.std))",
+            lower="min(1, max(0, datum.mean - datum.std))",
+        )
+    )
+
+    band = (
+        base.mark_area(opacity=0.2)
         .encode(
             x=alt.X("turn:Q", title="Turn"),
-            y=alt.Y("lower:Q", title=f"pass@{k_val}"),
+            y=alt.Y("lower:Q", title=f"pass@{k_val}", scale=alt.Scale(domain=[0, 1], nice=False)),
             y2="upper:Q",
             color=alt.Color("student:N", legend=None, scale=color_scale),
         )
     )
+
     lines = (
-        alt.Chart(sub)
-        .mark_line(point=True)
+        base.mark_line(point=True)
         .encode(
             x=alt.X("turn:Q", title="Turn"),
-            y=alt.Y("mean:Q", title=f"pass@{k_val}"),
+            y=alt.Y("mean_c:Q", title=f"pass@{k_val}", scale=alt.Scale(domain=[0, 1], nice=False)),
             color=alt.Color("student:N", title="Student", scale=color_scale),
-            tooltip=["student", "turn", alt.Tooltip("mean:Q", format=".3f"), alt.Tooltip("std:Q", format=".3f")],
+            tooltip=[
+                "student",
+                "turn",
+                alt.Tooltip("mean_c:Q", title="mean", format=".3f"),
+                alt.Tooltip("std:Q", format=".3f"),
+                alt.Tooltip("lower:Q", format=".3f"),
+                alt.Tooltip("upper:Q", format=".3f"),
+            ],
         )
     )
+
     return (band + lines).properties(title=f"pass@{k_val} {title_suffix}".strip(), height=300).interactive()
 
 def transcripts_dir(exp_dir: str, teacher: str, student: str, dataset: str) -> Path:
@@ -320,7 +401,8 @@ def build_student_emoji_labels(students: List[str]) -> Dict[str, str]:
 # =========================
 
 st.sidebar.title("Controls")
-exp_root = DEFAULT_EXP_ROOT  # fixed; no experiment control here
+exp_root = DEFAULT_EXP_ROOT
+data_root = DEFAULT_DATA_ROOT
 
 root_sig = experiments_root_signature(Path(exp_root))
 all_experiments = discover_experiments(exp_root, root_sig)
@@ -383,7 +465,6 @@ options_map = {f"{emoji_map[s]} {s}": s for s in students_union}
 # Keep widget selection in sync with auto-merged students
 labels_for_selected = [f"{emoji_map[s]} {s}" for s in st.session_state.selected_students]
 if "sidebar_students_multiselect" in st.session_state:
-    # ensure new students get added to current widget value
     cur_labels = set(st.session_state["sidebar_students_multiselect"])
     st.session_state["sidebar_students_multiselect"] = sorted(cur_labels.union(labels_for_selected))
 
@@ -415,7 +496,7 @@ with tab_results:
     any_plots = False
     for exp in all_experiments:
         exp_dir = str(Path(exp_root) / exp)
-        lay = discover_layout(exp_dir, layout_signature(Path(exp_dir)))  # <-- name-aware layout cache key
+        lay = discover_layout(exp_dir, layout_signature(Path(exp_dir)))  # name-aware layout cache key
         if teacher not in lay:
             continue
         # Students present in this experiment for chosen dataset
@@ -426,7 +507,7 @@ with tab_results:
             continue
 
         df = build_results_df(exp_dir, teacher, dataset, active_students)
-        # Silently skip experiments with no data for the active selection
+        # Silently skip experiments that have no data for the current selection
         if df.empty:
             continue
 
@@ -473,13 +554,24 @@ with tab_transcripts:
             t_student = st.selectbox("Student", t_students, index=0, key="transcript_student")
 
             tdir = transcripts_dir(exp_dir_for_transcripts, teacher, t_student, dataset)
-            t_sig = dir_signature(tdir)  # file additions inside transcripts/
+            t_sig = dir_signature(tdir)
             pids = list_pids(exp_dir_for_transcripts, teacher, t_student, dataset, t_sig)
 
             if not pids:
                 st.info("No transcripts found (no JSON files in transcripts/).")
             else:
                 pid = st.selectbox("Problem ID (pid)", pids, index=0, key="transcript_pid")
+
+                # --- Show the question at the top (from data/<teacher>/<dataset>/<student>.json) ---
+                question = lookup_question(DEFAULT_DATA_ROOT, teacher, dataset, t_student, pid)
+                st.markdown("#### Question")
+                if question:
+                    if looks_like_python_snippet(question):
+                        st.code(question.strip(), language="python")
+                    else:
+                        st.markdown(f"> {question}")
+                else:
+                    st.markdown("> _Not found in data index._")
 
                 this_file = tdir / f"{pid}.json"
                 f_sig = file_signature(this_file)
