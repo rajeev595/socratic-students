@@ -35,8 +35,8 @@ configs/
 
 1. **Clone the repo** and enter the project root:
    ```bash
-   git clone <your-repo-url>
-   cd <your-repo>
+   git clone https://github.com/rajeev595/interact_plus.git
+   cd interact_plus
    ```
 
 2. **Install Dependencies**
