@@ -83,6 +83,7 @@ def generate_math_completions(
             "You may reference the provided dialogue to aid solving the current question. Keep in mind the answers "
             "will be different between the two!"
         )
+        previous_conversation_str = "**PREVIOUS CONVERSATION**\n\n" + previous_conversation_str + "\n\n**NEW QUESTION**"
     elif previous_conversation_str and not is_ood:
         sys_prompt += (
             "\n\nIn addition, you have previously conversed with your math tutor about this question. "
