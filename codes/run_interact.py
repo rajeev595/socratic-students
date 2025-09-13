@@ -20,17 +20,7 @@ from openai import OpenAI
 
 from codes.llm_utils import build_client, chat_complete
 from codes.data.utils import remove_think_tags, msgs_to_string, format_messages
-from codes.prompts.code import (
-    get_humaneval_student_sys_prompt,
-    get_humaneval_student_sys_cot_prompt,
-    get_humaneval_teacher_sys_prompt,
-)
-from codes.prompts.math import (
-    get_gsm_student_sys_prompt,
-    get_gsm_student_sys_cot_prompt,
-    get_gsm_teacher_sys_prompt,
-)
-
+from codes.prompts.utils import _select_sys_prompt, _problem_greeting
 from codes.evaluation.code import generate_code_completions, evaluate_code_completion
 from codes.evaluation.math import generate_math_completions, evaluate_math_completion
 from codes.evaluation.utils import compute_pass_at_k
@@ -44,31 +34,8 @@ logging.basicConfig(
 
 
 # ---------- helpers ----------
-def _select_sys_prompt(dataset: str, use_cot: bool, is_student_turn: bool, problem: Dict[str, Any]) -> str:
-    """Choose the correct system prompt function and embed the problem text (already handled in your prompt fns)."""
-    if dataset == "code":
-        if is_student_turn:
-            return (get_humaneval_student_sys_cot_prompt if use_cot else get_humaneval_student_sys_prompt)(problem)
-        else:
-            return get_humaneval_teacher_sys_prompt(problem)
-    else:
-        if is_student_turn:
-            return (get_gsm_student_sys_cot_prompt if use_cot else get_gsm_student_sys_prompt)(problem)
-        else:
-            return get_gsm_teacher_sys_prompt(problem)
-
-
-def _problem_greeting(dataset: str) -> str:
-    """First message content (index 0 of the text timeline)."""
-    return (
-        "Hi there! I'm your coding tutor. How can I help you today?"
-        if dataset == "code"
-        else "Hi there! I'm your math tutor. How can I help you today?"
-    )
-
-
 def get_assessment(
-    dataset: str,
+    data_type: str,
     client: OpenAI,
     model_name: str,
     student_temperature: float,
@@ -83,8 +50,8 @@ def get_assessment(
     prev_convo = msgs_to_string(texts)
 
     # Pick generator/evaluator based on dataset
-    gen = generate_code_completions if dataset == "code" else generate_math_completions
-    efunc = evaluate_code_completion if dataset == "code" else evaluate_math_completion
+    gen = generate_code_completions if data_type == "code" else generate_math_completions
+    efunc = evaluate_code_completion if data_type == "code" else evaluate_math_completion
 
     # IMPORTANT: math/code generators use different kw names; route accordingly
     gen_kwargs = dict(
@@ -95,7 +62,7 @@ def get_assessment(
         num_samples=2,
         show_gt=False,
     )
-    if dataset == "code":
+    if data_type == "code":
         gen_kwargs["problem_dict"] = problem_dict
     else:
         gen_kwargs["problem"] = problem_dict
@@ -117,7 +84,7 @@ def get_assessment(
 
 
 def interact(
-    dataset: str,
+    data_type: str,
     transcripts_dir: str,    
     teacher_client: OpenAI,
     teacher_name: str,
@@ -136,13 +103,23 @@ def interact(
     Returns: (reply_text, prompt_tokens, completion_tokens)
     """
     pid = problem["id"]
+    transcript_fpath = os.path.join(transcripts_dir, f"{pid}.json")
+
+    if os.path.exists(transcript_fpath):
+        logger.info(f"loading transcript from {transcript_fpath}")
+        with open(transcript_fpath, "r") as f:
+            data = json.load(f)
+
+        if len(data) == total_turns:
+            texts = [ex["content"] for ex in data]
+            return texts, 0, 0, 0, 0
 
     total_teacher_prompt_tks = total_teacher_completion_tks = 0
     total_student_prompt_tks = total_student_completion_tks = 0
 
     # Initialize / resume conversation
     if start_from_turn <= 1:
-        texts: List[str] = [_problem_greeting(dataset)]
+        texts: List[str] = [_problem_greeting(data_type)]
         cur_start = 1
         logger.debug(f"[{pid}] starting fresh")
     else:
@@ -164,7 +141,7 @@ def interact(
         # Optional assessment injected into previous text
         if assessment_turn > 0 and turn == assessment_turn and len(texts) > 0:
             texts[-1] += get_assessment(
-                dataset=dataset,
+                data_type=data_type,
                 client=student_client,
                 model_name=student_name,
                 student_temperature=student_temperature,
@@ -174,7 +151,7 @@ def interact(
             logger.debug(f"[{pid}] assessment injected at turn {turn}")
 
         # Build messages for this turn
-        sys_prompt = _select_sys_prompt(dataset, use_cot, is_student, problem)
+        sys_prompt = _select_sys_prompt(data_type, use_cot, is_student, problem)
         starting_with_user = True if is_student else False
         messages = [{"role": "system", "content": sys_prompt}] + format_messages(texts, starting_with_user=starting_with_user)
 
@@ -220,7 +197,7 @@ def interact(
 
 def evaluate(
     texts: List[str],
-    dataset: str,
+    data_type: str,
     client: OpenAI,
     model_name: str,
     temperature: float,
@@ -236,11 +213,12 @@ def evaluate(
     Returns: (pass_at_k_scores, prompt_tokens_used, completion_tokens_used)
     """
     pass_at_k_scores = {}
+    generations = {}
     total_prompt_tks = total_completion_tks = 0
     for turn in range(start_from_turn, total_turns + 1, 2):
         prev_convo = msgs_to_string(texts[: turn])
 
-        if dataset == "code":
+        if data_type == "code":
             completions, p_tks, c_tks = generate_code_completions(
                 previous_conversation_str=prev_convo,
                 client=client,
@@ -277,14 +255,15 @@ def evaluate(
         pass_at_k_scores[turn] = compute_pass_at_k(flags, k_values)
         total_prompt_tks += p_tks
         total_completion_tks += c_tks
+        generations[turn] = [(c, f) for c, f in zip(completions, flags)]
 
         logger.debug(f"[{problem["id"]}] turn {turn} pass@k={pass_at_k_scores[turn]}")
 
-    return pass_at_k_scores, total_prompt_tks, total_completion_tks
+    return generations, pass_at_k_scores, total_prompt_tks, total_completion_tks
 
 
 def run_problem(
-    dataset: str,
+    data_type: str,
     transcripts_dir: str,
     teacher_client: OpenAI,
     teacher_name: str,
@@ -326,7 +305,7 @@ def run_problem(
         teacher_prompt_tks,
         teacher_completion_tks
     ) = interact(
-        dataset=dataset,
+        data_type=data_type,
         transcripts_dir=transcripts_dir,
         teacher_client=teacher_client,
         teacher_name=teacher_name,
@@ -343,12 +322,13 @@ def run_problem(
 
     # Evaluation
     (
-        pass_at_k_scores, 
-        prompt_tks, 
+        generations,
+        pass_at_k_scores,
+        prompt_tks,
         completion_tks
     ) = evaluate(
         texts=texts,
-        dataset=dataset,
+        data_type=data_type,
         client=student_client,
         model_name=student_name,
         temperature=student_temperature,
@@ -361,6 +341,7 @@ def run_problem(
     )
 
     return (
+        generations,
         pass_at_k_scores,
         teacher_prompt_tks,
         teacher_completion_tks,
@@ -422,44 +403,55 @@ def main(cfg: DictConfig) -> None:
     transcripts_dir = os.path.join(exp_dir, "transcripts")
     os.makedirs(transcripts_dir, exist_ok=True)
 
-    problems_path = os.path.join(
+    # Collect results across problems for aggregation
+    turn_results: Dict[int, List[Dict[int, float]]] = {turn: [] for turn in range(start_from_turn, total_turns + 1, 2)}
+    all_results = {}
+
+    # Load existing results
+    results_fpath = os.path.join(exp_dir, "itemized_results.json")
+    if os.path.exists(results_fpath):
+        with open(os.path.join(exp_dir, "itemized_results.json"), "r") as f:
+            all_results = json.load(f)
+
+            for _, example in all_results.items():
+                for turn, res_list in example["results"].items():
+                    turn_results[int(turn)].append({int(k): v for k, v in res_list.items()})
+
+        logger.info(f"Loaded experiment results for {len(all_results)} problems from: {results_fpath}")
+
+    # Load problems
+    problems_fpath = os.path.join(
         str(cfg.paths.data),
         str(cfg.teacher.model),
         dataset,
-        f"{cfg.student.model}.json",
+        f"{cfg.data.filename}.json",
     )
-
-    # Load problems
-    logger.info(f"Loading interaction problems: {problems_path}")
-    with open(problems_path, "r") as f:
+    logger.info(f"Loading interaction problems: {problems_fpath}")
+    with open(problems_fpath, "r") as f:
         data = json.load(f)
-    interaction_problems: List[Dict[str, Any]] = data["collected"][: cfg.data.data_amount]
-    interaction_problems = sorted(interaction_problems, key=lambda x: x["id"])
+    interaction_problems: List[Dict[str, Any]] = data["collected"]
+    interaction_problems = sorted(interaction_problems, key=lambda x: x["id"])[len(all_results): cfg.data.data_amount]
     logger.info(f"Total interaction problems: {len(interaction_problems)}")
 
+    # OOD problems
     evaluation_problems = interaction_problems
     if cfg.experiment.ood:
         ood_problems_path = os.path.join(
             str(cfg.paths.data),
             str(cfg.teacher.model),
             dataset,
-            f"{cfg.student.model}_ood.json",
+            f"{cfg.data.filename}_ood.json",
         )
 
         logger.info(f"Loading evaluation (OOD) problems: {ood_problems_path}")
         with open(ood_problems_path, "r") as f:
-            data = json.load(f)
-        evaluation_problems: List[Dict[str, Any]] = data[: cfg.data.data_amount]
-        evaluation_problems = sorted(evaluation_problems, key=lambda x: x["id"])
+            evaluation_problems = json.load(f)
+        evaluation_problems = sorted(evaluation_problems, key=lambda x: x["id"])[len(all_results): cfg.data.data_amount]
         logger.info(f"Total evaluation (OOD) problems: {len(evaluation_problems)}")
 
     # Build clients
     teacher_name, teacher_client = build_client(cfg.teacher.model)
     student_name, student_client = build_client(cfg.student.model)
-
-    # Collect results across problems for aggregation
-    turn_results: Dict[int, List[Dict[int, float]]] = {turn: [] for turn in range(start_from_turn, total_turns + 1, 2)}
-    all_results: Dict[str, List[Dict[int, float]]] = {}
 
     total_teacher_prompt_tks = total_teacher_completion_tks = 0
     total_student_prompt_tks = total_student_completion_tks = 0
@@ -468,7 +460,7 @@ def main(cfg: DictConfig) -> None:
     with ThreadPoolExecutor(max_workers=cfg.experiment.num_workers) as executor:
         future_to_pid = {executor.submit(
             run_problem,
-            dataset,
+            cfg.data.type,
             transcripts_dir,
             teacher_client,
             teacher_name,
@@ -487,8 +479,9 @@ def main(cfg: DictConfig) -> None:
             cfg.experiment.ood
         ): ip["id"] for (ip, ep) in zip(interaction_problems, evaluation_problems)}
 
-        for future in tqdm(as_completed(future_to_pid), total=len(future_to_pid)):
+        for future in tqdm(as_completed(future_to_pid), total=len(future_to_pid), desc="Running interact"):
             (
+                generations,
                 results,
                 teacher_prompt_tks,
                 teacher_completion_tks,
@@ -498,10 +491,13 @@ def main(cfg: DictConfig) -> None:
 
             # Update aggregates
             pid = future_to_pid[future]
-            all_results[pid] = []
             for turn, res_list in results.items():
                 turn_results[turn].append(res_list)
-                all_results[pid].append(res_list)
+
+            all_results[pid] = {
+                "results": results,
+                "generations": generations
+            }
 
             total_teacher_prompt_tks += teacher_prompt_tks
             total_teacher_completion_tks += teacher_completion_tks
