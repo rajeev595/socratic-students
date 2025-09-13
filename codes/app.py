@@ -240,12 +240,10 @@ def looks_like_python_snippet(text: str) -> bool:
     t = text.strip()
     if "```" in t:
         return True
-    # Quick markers for code-like prompts
     if t.startswith(("def ", "class ", "from ", "import ")):
         return True
     markers = ["\ndef ", "\nclass ", " from ", " import ", ">>> ", "@dataclass", "if __name__ == '__main__':"]
     score = sum(m in t for m in markers)
-    # Also count "codey" lines
     codey_lines = sum(1 for ln in t.splitlines() if ln.strip().startswith(("def ", "class ", "from ", "import ", "#")) or ln.strip().endswith(":"))
     return score >= 2 or codey_lines >= 2
 
@@ -253,7 +251,7 @@ def looks_like_python_snippet(text: str) -> bool:
 # Data shaping & plotting
 # =========================
 
-def agg_to_long_df(agg: dict, student: str) -> pd.DataFrame:
+def agg_to_long_df(agg: dict, student: str, experiment: str) -> pd.DataFrame:
     rows: List[Dict[str, float | int | str]] = []
     for turn_str, ks in agg.items():
         try:
@@ -268,100 +266,100 @@ def agg_to_long_df(agg: dict, student: str) -> pd.DataFrame:
             if not isinstance(vals, list) or len(vals) != 2:
                 continue
             mean, std = vals
-            rows.append({"turn": turn, "k": k, "mean": float(mean), "std": float(std), "student": student})
+            rows.append({
+                "turn": turn,
+                "k": k,
+                "mean": float(mean),
+                "std": float(std),
+                "student": student,
+                "experiment": experiment,
+            })
     if not rows:
-        return pd.DataFrame(columns=["turn", "k", "mean", "std", "student"])
+        return pd.DataFrame(columns=["turn", "k", "mean", "std", "student", "experiment"])
     df = pd.DataFrame(rows)
-    return df.sort_values(["k", "turn", "student"]).reset_index(drop=True)
+    return df.sort_values(["k", "turn", "student", "experiment"]).reset_index(drop=True)
 
-def build_results_df(exp_dir: str, teacher: str, dataset: str, students: List[str]) -> pd.DataFrame:
+def build_results_df_across_experiments(exp_root: str, experiments: List[str], teacher: str, dataset: str) -> pd.DataFrame:
+    """Combine all selected experiments; keep student + experiment columns."""
     frames: List[pd.DataFrame] = []
-    for s in students:
-        p = Path(exp_dir) / teacher / s / dataset / "aggregate_results.json"
-        sig = file_signature(p)
-        agg = load_aggregate_results(exp_dir, teacher, s, dataset, sig)
-        if agg:
-            frames.append(agg_to_long_df(agg, s))
+    for exp in experiments:
+        exp_dir = str(Path(exp_root) / exp)
+        lay = discover_layout(exp_dir, layout_signature(Path(exp_dir)))
+        if teacher not in lay:
+            continue
+        # students that have this dataset in this experiment
+        exp_students = sorted([s for s, ds in lay[teacher].items() if dataset in ds])
+        for s in exp_students:
+            p = Path(exp_dir) / teacher / s / dataset / "aggregate_results.json"
+            sig = file_signature(p)
+            agg = load_aggregate_results(exp_dir, teacher, s, dataset, sig)
+            if agg:
+                frames.append(agg_to_long_df(agg, s, exp))
     if not frames:
-        return pd.DataFrame(columns=["turn", "k", "mean", "std", "student"])
+        return pd.DataFrame(columns=["turn", "k", "mean", "std", "student", "experiment"])
     return pd.concat(frames, ignore_index=True)
 
-def make_palette(n: int) -> List[str]:
-    """
-    Produce n distinct colors; start with D3 category10, then extend using HSV if needed.
-    """
-    base = [
-        "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
-        "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
-    ]
+def okabe_ito_palette(n: int) -> List[str]:
+    """Color-blind friendly (Okabe-Ito)."""
+    base = ["#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#000000"]
     if n <= len(base):
         return base[:n]
-    cols = base[:]
-    import colorsys
-    extra = n - len(base)
-    for i in range(extra):
-        h = (i / max(1, extra))
-        s, v = 0.65, 0.65
-        r, g, b = colorsys.hsv_to_rgb(h, s, v)
-        cols.append("#%02x%02x%02x" % (int(r*255), int(g*255), int(b*255)))
-    return cols
+    # Extend conservatively if needed
+    extra = ["#999999", "#FFD700", "#8B4513", "#708090"]
+    return (base + extra)[:n]
 
-def build_student_colors(all_students_for_teacher_dataset: List[str]) -> Dict[str, str]:
-    ordered = sorted(all_students_for_teacher_dataset)
-    palette = make_palette(len(ordered))
-    return {stu: palette[i] for i, stu in enumerate(ordered)}
+def experiment_shape_range(n: int) -> List[str]:
+    """
+    Distinct point marker shapes per experiment (color-blind conscious).
+    Altair supports:
+      'circle','square','cross','diamond','triangle-up','triangle-down','triangle-right','triangle-left'
+    """
+    shapes = ["circle", "square", "triangle-up", "diamond", "cross", "triangle-down", "triangle-right", "triangle-left"]
+    if n <= len(shapes):
+        return shapes[:n]
+    # Repeat with slight reordering if many experiments
+    rep = (shapes * ((n + len(shapes) - 1) // len(shapes)))[:n]
+    return rep
 
-def plot_passk(df: pd.DataFrame, k_val: int, student_colors: Dict[str, str], title_suffix: str = "") -> alt.Chart:
-    sub = df[df["k"] == k_val].copy()
+def plot_passk_per_model(df_all: pd.DataFrame, student: str, k_val: int, exp_colors: Dict[str, str], exp_shapes: Dict[str, str], title_suffix: str = "") -> alt.Chart:
+    sub = df_all[(df_all["student"] == student) & (df_all["k"] == k_val)].copy()
     if sub.empty:
-        return alt.Chart(pd.DataFrame({"turn": [], "mean": [], "student": []})).mark_line().properties(
-            title=f"pass@{k_val} {title_suffix}".strip(), height=300
+        return alt.Chart(pd.DataFrame({"turn": [], "mean": [], "experiment": []})).mark_line().properties(
+            title=f"{student} — pass@{k_val} {title_suffix}".strip(), height=300
         )
 
-    # Color domain only for students present, with safe fallbacks
-    domain = sorted(sub["student"].unique().tolist())
-    fallback = make_palette(len(domain))
-    mapped = [student_colors.get(s, fallback[i]) for i, s in enumerate(domain)]
-    color_scale = alt.Scale(domain=domain, range=mapped)
+    # Per-experiment color & shape
+    exp_list = sorted(sub["experiment"].unique().tolist())
+    color_scale = alt.Scale(domain=exp_list, range=[exp_colors[e] for e in exp_list])
+    shape_scale = alt.Scale(domain=exp_list, range=[exp_shapes[e] for e in exp_list])
 
-    # Clamp into [0, 1] and lock axis domain
     base = (
         alt.Chart(sub)
         .transform_calculate(
             mean_c="min(1, max(0, datum.mean))",
-            upper="min(1, max(0, datum.mean + datum.std))",
-            lower="min(1, max(0, datum.mean - datum.std))",
         )
-    )
-
-    band = (
-        base.mark_area(opacity=0.2)
-        .encode(
-            x=alt.X("turn:Q", title="Turn"),
-            y=alt.Y("lower:Q", title=f"pass@{k_val}", scale=alt.Scale(domain=[0, 1], nice=False)),
-            y2="upper:Q",
-            color=alt.Color("student:N", legend=None, scale=color_scale),
-        )
-    )
-
-    lines = (
-        base.mark_line(point=True)
         .encode(
             x=alt.X("turn:Q", title="Turn"),
             y=alt.Y("mean_c:Q", title=f"pass@{k_val}", scale=alt.Scale(domain=[0, 1], nice=False)),
-            color=alt.Color("student:N", title="Student", scale=color_scale),
-            tooltip=[
-                "student",
-                "turn",
-                alt.Tooltip("mean_c:Q", title="mean", format=".3f"),
-                alt.Tooltip("std:Q", format=".3f"),
-                alt.Tooltip("lower:Q", format=".3f"),
-                alt.Tooltip("upper:Q", format=".3f"),
-            ],
+            color=alt.Color("experiment:N", title="Experiment", scale=color_scale),
         )
     )
 
-    return (band + lines).properties(title=f"pass@{k_val} {title_suffix}".strip(), height=300).interactive()
+    lines = base.mark_line()
+    points = base.mark_point(filled=True, size=70).encode(
+        shape=alt.Shape("experiment:N", title="Experiment", scale=shape_scale),
+        tooltip=[
+            alt.Tooltip("experiment:N", title="Experiment"),
+            alt.Tooltip("turn:Q", title="Turn"),
+            alt.Tooltip("mean_c:Q", title="mean", format=".3f"),
+        ],
+    )
+
+    chart = alt.layer(lines, points).properties(
+        title=f"{student} — pass@{k_val} {title_suffix}".strip(), height=300
+    ).interactive()
+
+    return chart
 
 def transcripts_dir(exp_dir: str, teacher: str, student: str, dataset: str) -> Path:
     return Path(exp_dir) / teacher / student / dataset / "transcripts"
@@ -388,16 +386,8 @@ def model_role_for_chat(entry_role: str, turn: Optional[int], teacher: str, stud
     if is_student and not is_teacher: return "student", entry_role or student, "🧑‍🎓"
     return "teacher", entry_role or teacher, "🧑‍🏫"
 
-def emoji_for_index(i: int) -> str:
-    squares = ["🟦","🟧","🟩","🟥","🟪","🟨","⬛","⬜"]
-    return squares[i % len(squares)]
-
-def build_student_emoji_labels(students: List[str]) -> Dict[str, str]:
-    ordered = sorted(students)
-    return {stu: f"{emoji_for_index(i)} {stu}" for i, stu in enumerate(ordered)}
-
 # =========================
-# Sidebar (Teacher/Dataset + combined multiselect)
+# Sidebar (Teacher/Dataset + EXPERIMENT selection)
 # =========================
 
 st.sidebar.title("Controls")
@@ -411,7 +401,7 @@ if not all_experiments:
     st.title("Model Interaction Dashboard")
     st.stop()
 
-# Build a union layout across experiments just to populate Teacher/Dataset/Students
+# Build a union layout across experiments to populate Teacher/Dataset/Students
 def union_layout_for_controls(exp_root: str, experiments: List[str]) -> LayoutType:
     union: LayoutType = {}
     for exp in experiments:
@@ -435,7 +425,6 @@ if not union_layout:
 all_teachers = sorted(union_layout.keys())
 teacher = st.sidebar.selectbox("Teacher", all_teachers, key="sidebar_teacher")
 
-# Prefer "math" as initial default; fall back to alphabetical if absent
 datasets_for_teacher = sorted({d for s, ds in union_layout[teacher].items() for d in ds})
 if not datasets_for_teacher:
     st.sidebar.error("No datasets found for the selected teacher.")
@@ -444,95 +433,77 @@ preferred = "math"
 default_idx = datasets_for_teacher.index(preferred) if preferred in datasets_for_teacher else 0
 dataset = st.sidebar.selectbox("Dataset", datasets_for_teacher, index=default_idx, key="sidebar_dataset")
 
-# Union of students for the chosen (teacher, dataset) across all experiments
-students_union = sorted([s for s, ds in union_layout[teacher].items() if dataset in ds])
-
-# Auto-merge newcomers into the selection so they appear without clicks
-prev_sel = st.session_state.get("selected_students", [])
-if prev_sel:
-    merged = [s for s in prev_sel if s in students_union] + [s for s in students_union if s not in prev_sel]
-else:
-    merged = students_union[:]
-st.session_state.selected_students = merged
-
-# Color palette for plots
-student_colors = build_student_colors(students_union)
-
-# Emoji markers & option labels aligned with sorted(students_union)
-emoji_map = {stu: emoji_for_index(i) for i, stu in enumerate(sorted(students_union))}
-options_map = {f"{emoji_map[s]} {s}": s for s in students_union}
-
-# Keep widget selection in sync with auto-merged students
-labels_for_selected = [f"{emoji_map[s]} {s}" for s in st.session_state.selected_students]
-if "sidebar_students_multiselect" in st.session_state:
-    cur_labels = set(st.session_state["sidebar_students_multiselect"])
-    st.session_state["sidebar_students_multiselect"] = sorted(cur_labels.union(labels_for_selected))
-
-# Multiselect with colored-label options
-selected_opts = st.sidebar.multiselect(
-    "Students (toggle visibility)",
-    options=list(options_map.keys()),
-    default=labels_for_selected,
-    key="sidebar_students_multiselect",
+# NEW: Experiment multiselect (replaces student controls)
+selected_experiments = st.sidebar.multiselect(
+    "Experiments (included in plots)",
+    options=all_experiments,
+    default=all_experiments,
+    key="sidebar_experiments_multiselect",
 )
 
-# Map back to plain names
-st.session_state.selected_students = [options_map[o] for o in selected_opts]
+if not selected_experiments:
+    st.sidebar.info("Select at least one experiment to visualize results.")
+    st.stop()
+
+# Build the combined results across selected experiments
+df_all = build_results_df_across_experiments(exp_root, selected_experiments, teacher, dataset)
+
+# Which students appear (for this teacher/dataset) in ANY selected experiment?
+students_union = sorted(df_all["student"].unique().tolist()) if not df_all.empty else []
 
 # =========================
 # Main Tabs
 # =========================
 
-tab_results, tab_transcripts = st.tabs(["📈 Results", "💬 Transcripts"])
+tab_results, tab_transcripts = st.tabs(["📈 Results (Per Model)", "💬 Transcripts"])
 
 # =========================
-# Results Tab — sequential sections per experiment
+# Results Tab — PER MODEL rows, each showing all experiments
 # =========================
 
 with tab_results:
-    st.subheader("Aggregate Results (by experiment)")
-    st.caption(f"Teacher: `{teacher}` · Dataset: `{dataset}`")
+    st.subheader("Aggregate Results (per model)")
+    st.caption(f"Teacher: `{teacher}` · Dataset: `{dataset}` · Experiments: {', '.join(selected_experiments) if selected_experiments else '(none)' }")
 
-    any_plots = False
-    for exp in all_experiments:
-        exp_dir = str(Path(exp_root) / exp)
-        lay = discover_layout(exp_dir, layout_signature(Path(exp_dir)))  # name-aware layout cache key
-        if teacher not in lay:
-            continue
-        # Students present in this experiment for chosen dataset
-        exp_students = sorted([s for s, ds in lay[teacher].items() if dataset in ds])
-        # Apply multiselect filter
-        active_students = [s for s in exp_students if s in st.session_state.selected_students]
-        if not active_students:
-            continue
+    if df_all.empty or not students_union:
+        st.info("No matching results for the current selection.")
+    else:
+        # Prepare consistent color/shape for experiments
+        exps_sorted = sorted(set(selected_experiments) & set(df_all["experiment"].unique().tolist()))
+        colors = okabe_ito_palette(len(exps_sorted))
+        shapes = experiment_shape_range(len(exps_sorted))
+        exp_colors = {e: colors[i] for i, e in enumerate(exps_sorted)}
+        exp_shapes = {e: shapes[i] for i, e in enumerate(exps_sorted)}
 
-        df = build_results_df(exp_dir, teacher, dataset, active_students)
-        # Silently skip experiments that have no data for the current selection
-        if df.empty:
-            continue
-
-        st.markdown(f"### `{exp}`")
-
-        with st.expander("Show data table", expanded=False):
-            st.dataframe(df, use_container_width=True)
-
-        col1, col2, col3 = st.columns(3)
         title_suffix = f"({teacher}, {dataset})"
-        with col1:
-            st.altair_chart(plot_passk(df, 1, student_colors, title_suffix), use_container_width=True)
-        with col2:
-            st.altair_chart(plot_passk(df, 5, student_colors, title_suffix), use_container_width=True)
-        with col3:
-            st.altair_chart(plot_passk(df, 10, student_colors, title_suffix), use_container_width=True)
+        for stu in students_union:
+            st.markdown(f"### `{stu}`")
+            with st.expander("Show data table", expanded=False):
+                st.dataframe(
+                    df_all[df_all["student"] == stu].sort_values(["k", "turn", "experiment"]),
+                    use_container_width=True
+                )
 
-        any_plots = True
-        st.markdown("---")
-
-    if not any_plots:
-        st.info("No matching results across experiments for the current selection and students.")
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.altair_chart(
+                    plot_passk_per_model(df_all, stu, 1, exp_colors, exp_shapes, title_suffix),
+                    use_container_width=True
+                )
+            with col2:
+                st.altair_chart(
+                    plot_passk_per_model(df_all, stu, 5, exp_colors, exp_shapes, title_suffix),
+                    use_container_width=True
+                )
+            with col3:
+                st.altair_chart(
+                    plot_passk_per_model(df_all, stu, 10, exp_colors, exp_shapes, title_suffix),
+                    use_container_width=True
+                )
+            st.markdown("---")
 
 # =========================
-# Transcripts Tab — experiment select inside the tab
+# Transcripts Tab — unchanged (experiment select inside tab)
 # =========================
 
 with tab_transcripts:
