@@ -1,7 +1,7 @@
 paths:
   openai_api_key_fpath: /home/ambati/.openai_api_key.zshrc      # path to OpenAI API key
-  data: /playpen-ssd/ambati/interact_plus/data/                 # path to data
-  experiments: /playpen-ssd/ambati/interact_plus/experiments/   # path to save experiment results
+  data: /playpen-hdd/ambati/interact_plus/data/                 # path to data
+  experiments: /playpen-hdd/ambati/interact_plus/experiments/   # path to save experiment results
 
 # Model
 teacher:
@@ -9,14 +9,14 @@ teacher:
   temperature: 0.3
 
 student:
-  model: qwen7_dpo
+  model: qwen7
   temperature: 0.3
 
 # Data & paths
 data:
   type: code                    # code or math
   filename: qwen7
-  data_amount: 100
+  data_amount: 200
 
 # Generation / evaluation
 gen:
@@ -28,9 +28,7 @@ gen:
   take_every: 3                 # only used for math dataset
 
 # Direct Preference Optimization (DPO) settings
-dpo:
-  data_dir1: ${paths.experiments}/unguided/gpt-4o/qwen7/humaneval_opc/
-  data_dir2: ${paths.experiments}/${experiments.name}/gpt-4o/qwen32/humaneval_opc/
+train:
   model_fpath: /playpen-hdd/shared/pretrained_models/Qwen/models--Qwen--Qwen2.5-7B-Instruct/snapshots/a09a35458c702b33eeacc393d103063234e8bc28/
   split: 0.8
   use_4bit: True
@@ -41,12 +39,12 @@ dpo:
   grad_accum: 8
   lr: 5e-6
   beta: 0.1
-  epochs: 3
-  gpus: [2]
+  epochs: 10
+  gpus: [1]
 
 # Experiment settings
 experiment:
-  name: unguided_from_qwen32
+  name: selfguided
   cot: False
   ood: False
   dataset: humaneval_opc        # code - humaneval_opc/mbpp, math - gsm
