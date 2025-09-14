@@ -18,6 +18,8 @@ from __future__ import annotations
 import os
 from typing import List, Dict, Tuple
 
+from hydra.utils import to_absolute_path
+
 from openai import OpenAI
 from tenacity import (
     retry,
@@ -35,6 +37,7 @@ _MODEL_ALIASES: Dict[str, Tuple[str, int | None]] = {
     "llama8":   ("meta-llama/Llama-3.1-8B-Instruct", 6006),
     "qwen3":    ("Qwen/Qwen2.5-3B-Instruct",         6007),
     "qwen7":    ("Qwen/Qwen2.5-7B-Instruct",         6008),
+    "qwen7_dpo": ("Qwen/Qwen2.5-7B-Instruct",        6020),
     "qwen14":   ("Qwen/Qwen2.5-14B-Instruct",        6009),
     "qwen32":   ("Qwen/Qwen2.5-32B-Instruct",        6010),
     "mistral7": ("mistralai/Mistral-7B-Instruct-v0.3", 6011),
@@ -49,6 +52,14 @@ _MODEL_ALIASES: Dict[str, Tuple[str, int | None]] = {
     "gemma1":   ("google/gemma-3-1b-it",             6018),
     "phi4mini": ("microsoft/Phi-4-mini-instruct",    6019)
 }
+
+
+def set_openai_key_env(openai_api_key_fpath: str) -> None:
+    # Load API key and export for OpenAI SDK
+    key_path = to_absolute_path(str(openai_api_key_fpath))
+    with open(key_path, "r") as f:
+        openai_key = f.read().strip()
+    os.environ["OPENAI_API_KEY"] = openai_key
 
 
 def build_client(model: str) -> Tuple[str, OpenAI]:
