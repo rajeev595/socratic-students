@@ -444,6 +444,7 @@ def main(cfg: DictConfig) -> None:
 
             if result == GOOD_PROBLEM:
                 collected.append(problem)
+                student_ids.add(problem["id"])
 
             elif result == STUDENT_BLACKLIST:
                 student_ids.add(problem["id"])
