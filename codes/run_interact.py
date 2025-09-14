@@ -13,12 +13,11 @@ import json
 import numpy as np
 from tqdm import tqdm
 import hydra
-from hydra.utils import to_absolute_path
 from omegaconf import DictConfig
 
 from openai import OpenAI
 
-from codes.llm_utils import build_client, chat_complete
+from codes.llm_utils import set_openai_key_env, build_client, chat_complete
 from codes.data.utils import remove_think_tags, msgs_to_string, format_messages
 from codes.prompts.utils import _select_sys_prompt, _problem_greeting
 from codes.evaluation.code import generate_code_completions, evaluate_code_completion
@@ -84,119 +83,39 @@ def get_assessment(
 
 
 def interact(
-    data_type: str,
-    transcripts_dir: str,    
-    teacher_client: OpenAI,
-    teacher_name: str,
-    teacher_temperature: float,
-    student_client: OpenAI,
-    student_name: str,
-    student_temperature: float,
+    is_student: bool,
+    texts: List[str],
     problem: Dict[str, Any],
-    start_from_turn: int,
-    total_turns: int,
-    assessment_turn: int,
-    use_cot: bool = False,
-) -> Tuple[str, int, int]:
-    """
-    Generate a single reply for the current turn.
-    Returns: (reply_text, prompt_tokens, completion_tokens)
-    """
-    pid = problem["id"]
-    transcript_fpath = os.path.join(transcripts_dir, f"{pid}.json")
+    num_samples,
+    data_type: str,
+    client: OpenAI,
+    model_name: str,
+    temperature: float,
+    use_cot: bool = False,  
+):
+    # Build messages for this turn
+    sys_prompt = _select_sys_prompt(data_type, use_cot, is_student, problem)
+    starting_with_user = True if is_student else False
+    messages = [{"role": "system", "content": sys_prompt}] + format_messages(
+        texts, starting_with_user=starting_with_user
+    )
 
-    if os.path.exists(transcript_fpath):
-        logger.info(f"loading transcript from {transcript_fpath}")
-        with open(transcript_fpath, "r") as f:
-            data = json.load(f)
-
-        if len(data) == total_turns:
-            texts = [ex["content"] for ex in data]
-            return texts, 0, 0, 0, 0
-
-    total_teacher_prompt_tks = total_teacher_completion_tks = 0
-    total_student_prompt_tks = total_student_completion_tks = 0
-
-    # Initialize / resume conversation
-    if start_from_turn <= 1:
-        texts: List[str] = [_problem_greeting(data_type)]
-        cur_start = 1
-        logger.debug(f"[{pid}] starting fresh")
-    else:
-        tpath = os.path.join(transcripts_dir, f"{pid}.json")
-        if os.path.exists(tpath):
-            with open(tpath, "r") as f:
-                prev = json.load(f)
-            texts = [m["content"] for m in prev][:start_from_turn]
-            cur_start = start_from_turn
-            logger.info(f"[{pid}] resumed at turn {cur_start} from {tpath}")
-        else:
-            texts = ["Hi there! Let's pick up the conversation."]
-            cur_start = 1
-            logger.warning(f"[{pid}] resume requested but no transcript found; starting fresh")
-
-    for turn in range(cur_start, total_turns, 1):
-        is_student = (turn % 2 == 1)
-
-        # Optional assessment injected into previous text
-        if assessment_turn > 0 and turn == assessment_turn and len(texts) > 0:
-            texts[-1] += get_assessment(
-                data_type=data_type,
-                client=student_client,
-                model_name=student_name,
-                student_temperature=student_temperature,
-                problem_dict=problem,
-                texts=texts,
-            )
-            logger.debug(f"[{pid}] assessment injected at turn {turn}")
-
-        # Build messages for this turn
-        sys_prompt = _select_sys_prompt(data_type, use_cot, is_student, problem)
-        starting_with_user = True if is_student else False
-        messages = [{"role": "system", "content": sys_prompt}] + format_messages(texts, starting_with_user=starting_with_user)
-
-        # Choose model for this turn
-        cur_client = student_client if is_student else teacher_client
-        cur_model = student_name if is_student else teacher_name
-        cur_temperature = float(student_temperature if is_student else teacher_temperature)
-
-        # Generate a reply
-        texts_list, p_tks, c_tks = chat_complete(
-            cur_client, cur_model, messages, n=1, temperature=cur_temperature, max_tokens=2048
-        )
-        reply = (texts_list[0] if texts_list else "").strip()
+    # Generate a reply
+    texts_list, p_tks, c_tks = chat_complete(
+        client, model_name, messages, num_samples, temperature, max_tokens=2048
+    )
+    replies = []
+    for text in texts_list:
+        reply = (text if text else "").strip()
         if ("<think>" in reply) or ("</think>" in reply):
             reply = remove_think_tags(reply)
-        
-        texts.append(reply)
-        if is_student:
-            total_student_prompt_tks += p_tks
-            total_student_completion_tks += c_tks
-        else:
-            total_teacher_prompt_tks += p_tks
-            total_teacher_completion_tks += c_tks
+        replies.append(reply)
 
-    # Save transcript with roles (model names as roles)
-    edited_msgs: List[Dict[str, Any]] = []
-    for idx, text in enumerate(texts):
-        role = student_name if (idx % 2 == 1) else teacher_name
-        edited_msgs.append({"role": role, "turn": idx, "content": text})
-
-    # Save transcript
-    with open(os.path.join(transcripts_dir, f"{pid}.json"), "w") as f:
-        json.dump(edited_msgs, f, indent=2)
-
-    return (
-        texts, 
-        total_student_prompt_tks, 
-        total_student_completion_tks, 
-        total_teacher_prompt_tks, 
-        total_teacher_completion_tks
-    )
+    return replies, p_tks, c_tks
 
 
 def evaluate(
-    texts: List[str],
+    prev_convo: str,
     data_type: str,
     client: OpenAI,
     model_name: str,
@@ -204,62 +123,46 @@ def evaluate(
     problem: Dict[str, Any],
     k_values: List[int],
     num_samples: int,
-    start_from_turn: int,
-    total_turns: int,
-    is_ood: bool = False,
-) -> Tuple[Dict[int, float], int, int]:
-    """
-    Inline evaluation for the current student turn.
-    Returns: (pass_at_k_scores, prompt_tokens_used, completion_tokens_used)
-    """
-    pass_at_k_scores = {}
-    generations = {}
-    total_prompt_tks = total_completion_tks = 0
-    for turn in range(start_from_turn, total_turns + 1, 2):
-        prev_convo = msgs_to_string(texts[: turn])
+    is_ood: bool = False,        
+):
+    if data_type == "code":
+        completions, p_tks, c_tks = generate_code_completions(
+            previous_conversation_str=prev_convo,
+            client=client,
+            model_name=model_name,
+            problem_dict=problem,
+            num_samples=num_samples,
+            temperature=temperature,
+            max_tokens=2048,
+            show_gt=False,
+        )
+        eval_func = evaluate_code_completion
+    else:
+        completions, p_tks, c_tks = generate_math_completions(
+            previous_conversation_str=prev_convo,
+            client=client,
+            model_name=model_name,
+            problem=problem,
+            num_samples=num_samples,
+            temperature=temperature,
+            max_tokens=512,
+            show_gt=False,
+            is_ood=is_ood,
+        )
+        eval_func = evaluate_math_completion
 
-        if data_type == "code":
-            completions, p_tks, c_tks = generate_code_completions(
-                previous_conversation_str=prev_convo,
-                client=client,
-                model_name=model_name,
-                problem_dict=problem,
-                num_samples=num_samples,
-                temperature=temperature,
-                max_tokens=2048,
-                show_gt=False,
-            )
-            eval_func = evaluate_code_completion
-        else:
-            completions, p_tks, c_tks = generate_math_completions(
-                previous_conversation_str=prev_convo,
-                client=client,
-                model_name=model_name,
-                problem=problem,
-                num_samples=num_samples,
-                temperature=temperature,
-                max_tokens=512,
-                show_gt=False,
-                is_ood=is_ood,
-            )
-            eval_func = evaluate_math_completion
+    # Evaluate completions in parallel
+    flags: List[bool] = []
+    with ThreadPoolExecutor() as ex:
+        futures = [ex.submit(eval_func, comp, problem) for comp in completions]
+        for fut in as_completed(futures):
+            _, passed = fut.result()
+            flags.append(passed)
+    
+    pass_at_k_scores = compute_pass_at_k(flags, k_values)
+    generations = [(c, f) for c, f in zip(completions, flags)]
 
-        # Evaluate completions in parallel
-        flags: List[bool] = []
-        with ThreadPoolExecutor() as ex:
-            futures = [ex.submit(eval_func, comp, problem) for comp in completions]
-            for fut in as_completed(futures):
-                _, passed = fut.result()
-                flags.append(passed)
-        
-        pass_at_k_scores[turn] = compute_pass_at_k(flags, k_values)
-        total_prompt_tks += p_tks
-        total_completion_tks += c_tks
-        generations[turn] = [(c, f) for c, f in zip(completions, flags)]
-
-        logger.debug(f"[{problem["id"]}] turn {turn} pass@k={pass_at_k_scores[turn]}")
-
-    return generations, pass_at_k_scores, total_prompt_tks, total_completion_tks
+    return pass_at_k_scores, generations, p_tks, c_tks
 
 
 def run_problem(
@@ -297,56 +200,118 @@ def run_problem(
     """
     assert interaction_problem["id"] == evaluation_problem["id"], "pid of interaction and evaluation doesn't match!"
 
-    # Interaction
-    (
-        texts,
-        student_prompt_tks,
-        student_completion_tks,
-        teacher_prompt_tks,
-        teacher_completion_tks
-    ) = interact(
-        data_type=data_type,
-        transcripts_dir=transcripts_dir,
-        teacher_client=teacher_client,
-        teacher_name=teacher_name,
-        teacher_temperature=teacher_temperature,
-        student_client=student_client,
-        student_name=student_name,
-        student_temperature=student_temperature,
-        problem=interaction_problem,
-        start_from_turn=start_from_turn,
-        total_turns=total_turns,
-        assessment_turn=assessment_turn,
-        use_cot=use_cot
-    )
+    pid = interaction_problem["id"]
+    transcript_fpath = os.path.join(transcripts_dir, f"{pid}.json")
 
-    # Evaluation
-    (
-        generations,
-        pass_at_k_scores,
-        prompt_tks,
-        completion_tks
-    ) = evaluate(
-        texts=texts,
-        data_type=data_type,
-        client=student_client,
-        model_name=student_name,
-        temperature=student_temperature,
-        problem=evaluation_problem,
-        k_values=k_values,
-        num_samples=num_samples,
-        start_from_turn=start_from_turn,
-        total_turns=total_turns,
-        is_ood=is_ood,
-    )
+    if os.path.exists(transcript_fpath):
+        logger.info(f"loading transcript from {transcript_fpath}")
+        with open(transcript_fpath, "r") as f:
+            data = json.load(f)
+
+        if len(data) == total_turns:
+            texts = [ex["content"] for ex in data]
+            return texts, 0, 0, 0, 0
+
+    pass_at_k_scores = {}
+    generations = {}
+    total_teacher_prompt_tks = total_teacher_completion_tks = 0
+    total_student_prompt_tks = total_student_completion_tks = 0
+
+    # Initialize / resume conversation
+    if start_from_turn <= 1:
+        texts: List[str] = [_problem_greeting(data_type)]
+        cur_start = 1
+        logger.debug(f"[{pid}] starting fresh")
+    else:
+        tpath = os.path.join(transcripts_dir, f"{pid}.json")
+        if os.path.exists(tpath):
+            with open(tpath, "r") as f:
+                prev = json.load(f)
+            texts = [m["content"] for m in prev][:start_from_turn]
+            cur_start = start_from_turn
+            logger.info(f"[{pid}] resumed at turn {cur_start} from {tpath}")
+        else:
+            texts = ["Hi there! Let's pick up the conversation."]
+            cur_start = 1
+            logger.warning(f"[{pid}] resume requested but no transcript found; starting fresh")
+
+    for turn in range(cur_start, total_turns + 1, 1):
+        is_student = (turn % 2 == 1)
+
+        # Optional assessment injected into previous text
+        if assessment_turn > 0 and turn == assessment_turn and len(texts) > 0:
+            texts[-1] += get_assessment(
+                data_type=data_type,
+                client=student_client,
+                model_name=student_name,
+                student_temperature=student_temperature,
+                problem_dict=interaction_problem,
+                texts=texts,
+            )
+            logger.debug(f"[{pid}] assessment injected at turn {turn}")
+
+        # Evaluation on student turns
+        if is_student:
+            prev_convo = msgs_to_string(texts[: turn])
+
+            pass_at_k_scores_turn, generations_turn, p_tks, c_tks = evaluate(
+                prev_convo,
+                data_type,
+                student_client,
+                student_name,
+                student_temperature,
+                evaluation_problem,
+                k_values,
+                num_samples,
+                is_ood
+            )
+
+            pass_at_k_scores[turn] = pass_at_k_scores_turn
+            total_student_prompt_tks += p_tks
+            total_teacher_completion_tks += c_tks
+            generations[turn] = generations_turn
+
+            logger.debug(f"[{evaluation_problem["id"]}] turn {turn} pass@k={pass_at_k_scores[turn]}")
+
+        # Run interaction step
+        replies, p_tks, c_tks = interact(
+            is_student,
+            texts,
+            interaction_problem,
+            1,
+            data_type,
+            student_client if is_student else teacher_client,
+            student_name if is_student else teacher_name,
+            student_temperature if is_student else teacher_temperature,
+            use_cot
+        )
+
+        # Update chat transcript and token counts
+        texts.append(replies[0])
+        if is_student:
+            total_student_prompt_tks += p_tks
+            total_student_completion_tks += c_tks
+        else:
+            total_teacher_prompt_tks += p_tks
+            total_teacher_completion_tks += c_tks
+
+    # Save transcript with roles (model names as roles)
+    edited_msgs: List[Dict[str, Any]] = []
+    for idx, text in enumerate(texts):
+        role = student_name if (idx % 2 == 1) else teacher_name
+        edited_msgs.append({"role": role, "turn": idx, "content": text})
+
+    # Save transcript
+    with open(os.path.join(transcripts_dir, f"{pid}.json"), "w") as f:
+        json.dump(edited_msgs, f, indent=2)
 
     return (
         generations,
         pass_at_k_scores,
-        teacher_prompt_tks,
-        teacher_completion_tks,
-        student_prompt_tks + prompt_tks,
-        student_completion_tks + completion_tks,
+        total_teacher_prompt_tks,
+        total_teacher_completion_tks,
+        total_student_prompt_tks,
+        total_student_completion_tks
     )
 
 
@@ -377,11 +342,8 @@ def main(cfg: DictConfig) -> None:
     """
     start_time = time.perf_counter()  # ---- start timer ----
 
-    # Load API key and export for OpenAI SDK
-    key_path = to_absolute_path(str(cfg.paths.openai_api_key_fpath))
-    with open(key_path, "r") as f:
-        openai_key = f.read().strip()
-    os.environ["OPENAI_API_KEY"] = openai_key
+    # set the OpenAI key env variable
+    set_openai_key_env(cfg.paths.openai_api_key_fpath)
 
     # Hydra config keys
     dataset: str = cfg.experiment.dataset
