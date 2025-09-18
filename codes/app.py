@@ -29,7 +29,7 @@ class TranscriptEntry(TypedDict, total=False):
     content: str
 
 # Project dir
-PROJ_DIR = "/playpen-ssd/ambati/interact_plus/"
+PROJ_DIR = "/playpen-hdd/ambati/interact_plus/"
 
 # Experiment and data dir
 DEFAULT_EXP_ROOT = str(Path(PROJ_DIR) / "experiments")

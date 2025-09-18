@@ -37,7 +37,6 @@ _MODEL_ALIASES: Dict[str, Tuple[str, int | None]] = {
     "llama8":   ("meta-llama/Llama-3.1-8B-Instruct", 6006),
     "qwen3":    ("Qwen/Qwen2.5-3B-Instruct",         6007),
     "qwen7":    ("Qwen/Qwen2.5-7B-Instruct",         6008),
-    "qwen7_dpo": ("Qwen/Qwen2.5-7B-Instruct",        6020),
     "qwen14":   ("Qwen/Qwen2.5-14B-Instruct",        6009),
     "qwen32":   ("Qwen/Qwen2.5-32B-Instruct",        6010),
     "mistral7": ("mistralai/Mistral-7B-Instruct-v0.3", 6011),
