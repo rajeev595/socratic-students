@@ -352,7 +352,7 @@ def main(cfg: DictConfig) -> None:
     assessment_turn: int = int(cfg.experiment.assessment_turn)
     use_cot: bool = bool(cfg.experiment.cot)
     k_values: List[int] = list(cfg.gen.k_values)
-    num_samples: int = int(cfg.gen.num_samples)
+    num_samples: int = min(int(cfg.gen.num_samples), max(k_values))
 
     # Paths
     exp_dir = os.path.join(
