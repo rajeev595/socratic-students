@@ -37,7 +37,7 @@ def get_assessment(
     data_type: str,
     client: OpenAI,
     model_name: str,
-    student_temperature: float,
+    temperature: float,
     problem_dict: Dict[str, Any],
     texts: List[str],
 ) -> str:
@@ -57,7 +57,7 @@ def get_assessment(
         previous_conversation_str=prev_convo,
         client=client,
         model_name=model_name,
-        temperature=float(student_temperature),
+        temperature=float(temperature),
         num_samples=2,
         show_gt=False,
     )
@@ -91,7 +91,7 @@ def interact(
     client: OpenAI,
     model_name: str,
     temperature: float,
-    use_cot: bool = False,  
+    use_cot: bool = False,
 ):
     # Build messages for this turn
     sys_prompt = _select_sys_prompt(data_type, use_cot, is_student, problem)
@@ -102,7 +102,12 @@ def interact(
 
     # Generate a reply
     texts_list, p_tks, c_tks = chat_complete(
-        client, model_name, messages, num_samples, temperature, max_tokens=2048
+        client=client,
+        model_name=model_name,
+        messages=messages,
+        n=num_samples,
+        temperature=temperature,
+        max_tokens=2048
     )
     replies = []
     for text in texts_list:
@@ -244,7 +249,7 @@ def run_problem(
                 data_type=data_type,
                 client=student_client,
                 model_name=student_name,
-                student_temperature=student_temperature,
+                temperature=student_temperature,
                 problem_dict=interaction_problem,
                 texts=texts,
             )
@@ -411,9 +416,14 @@ def main(cfg: DictConfig) -> None:
         evaluation_problems = sorted(evaluation_problems, key=lambda x: x["id"])[len(all_results): cfg.data.data_amount]
         logger.info(f"Total evaluation (OOD) problems: {len(evaluation_problems)}")
 
-    # Build clients
-    teacher_name, teacher_client = build_client(cfg.teacher.model)
-    student_name, student_client = build_client(cfg.student.model)
+    # Build teacher and student clients (names may be normalized inside)
+    teacher_name, teacher_client = build_client(
+        cfg.teacher.model, cfg.teacher.fpath, cfg.teacher.server
+    )
+    student_name, student_client = build_client(
+        cfg.student.model, cfg.student.fpath, cfg.student.server
+    )
+    logger.info("Teacher=%s | Student=%s", teacher_name, student_name)
 
     total_teacher_prompt_tks = total_teacher_completion_tks = 0
     total_student_prompt_tks = total_student_completion_tks = 0
