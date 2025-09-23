@@ -1,6 +1,6 @@
 import os
 import logging
-from typing import List
+from typing import List, Optional
 
 import hydra
 from omegaconf import DictConfig
@@ -8,7 +8,7 @@ from omegaconf import DictConfig
 import torch
 from datasets import load_dataset
 from transformers import AutoTokenizer, AutoModelForCausalLM, GenerationConfig
-
+from transformers.trainer_utils import get_last_checkpoint
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -16,7 +16,9 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s: %(message)s",
 )
 
-
+# -----------------------------
+# Preprocess helpers
+# -----------------------------
 def preprocess_rlhf_example(
     example,
     tokenizer: AutoTokenizer
@@ -24,13 +26,11 @@ def preprocess_rlhf_example(
     prompt_str = tokenizer.apply_chat_template(
         example["prompt"], tokenize=False, add_generation_prompt=True
     )
-
     return {
         "prompt": prompt_str,
         "chosen": example["chosen_response"],
-        "rejected": example["rejected_response"]
+        "rejected": example["rejected_response"],
     }
-
 
 def preprocess_sft_example(
     example,
@@ -39,32 +39,40 @@ def preprocess_sft_example(
     prompt_str = tokenizer.apply_chat_template(
         example["prompt"], tokenize=False, add_generation_prompt=True
     )
-
     return {
         "prompt": prompt_str,
-        "completion": example["response"]
+        "completion": example["response"],
     }
 
-
+# -----------------------------
+# Model setup
+# -----------------------------
 def setup_for_training(
     tokenizer: AutoTokenizer,
-    model_fpath: str,
+    base_model_fpath: str,
     use_4bit: bool,
     lora_r: int,
     lora_alpha: int,
     lora_dropout: float,
-    gpus: List[int],        
+    enable_gc: bool,  # control gradient checkpointing from caller
 ):
-    os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(str(g) for g in gpus) 
+    """
+    Loads the *base* model (not an adapter folder). If you want to start from an
+    existing adapter (e.g., SFT), attach it later via PeftModel.from_pretrained(...)
+    in the caller.
+    """
+    # Do NOT modify CUDA_VISIBLE_DEVICES here. Let the launcher manage visibility.
+    local_rank = int(os.getenv("LOCAL_RANK", "0"))
+    torch.cuda.set_device(local_rank)
 
     from peft import LoraConfig, prepare_model_for_kbit_training
     from transformers import BitsAndBytesConfig
 
-    # ---- Tokenizer defaults for causal LM DPO ----
+    # Tokenizer defaults for chat LM SFT/DPO
     tokenizer.padding_side = "right"
     tokenizer.truncation_side = "right"
 
-    # ---- Model (QLoRA by default) ----
+    # BitsAndBytes/QLoRA config (if requested)
     bnb = BitsAndBytesConfig(
         load_in_4bit=use_4bit,
         bnb_4bit_use_double_quant=True,
@@ -72,31 +80,36 @@ def setup_for_training(
         bnb_4bit_compute_dtype=torch.bfloat16,
     ) if use_4bit else None
 
+    # Load ON THE SAME DEVICE as this process will train on for 4-bit;
+    # for full precision, let TRL/Accelerate place the model later.
     model = AutoModelForCausalLM.from_pretrained(
-        model_fpath,
+        base_model_fpath,
         quantization_config=bnb,
-        device_map="auto",
+        device_map=({"": local_rank} if use_4bit else None),
+        low_cpu_mem_usage=False,
+        torch_dtype=(torch.bfloat16 if use_4bit else None),
     )
 
-    # 1) Model config
+    # Align token IDs
+    if tokenizer.pad_token is None and tokenizer.eos_token is not None:
+        tokenizer.pad_token = tokenizer.eos_token
     model.config.pad_token_id = tokenizer.pad_token_id
     model.config.eos_token_id = tokenizer.eos_token_id
 
-    # 2) Generation config
+    # Generation config alignment
     gen = getattr(model, "generation_config", GenerationConfig())
     gen.pad_token_id = tokenizer.pad_token_id
     gen.eos_token_id = tokenizer.eos_token_id
     model.generation_config = gen
 
-    # Use this in both training functions
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-    model.config.pad_token_id = tokenizer.pad_token_id
-
-    # Prepare for k-bit training & ensure inputs get grads
+    # Prepare for k-bit training (adds input grad hooks etc.)
     if use_4bit:
-        model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
+        model = prepare_model_for_kbit_training(
+            model,
+            use_gradient_checkpointing=bool(enable_gc),
+        )
 
+    # Ensure inputs get grads (older transformers compatibility)
     if hasattr(model, "enable_input_require_grads"):
         model.enable_input_require_grads()
     else:
@@ -107,14 +120,16 @@ def setup_for_training(
                 pass
         model.get_input_embeddings().register_forward_hook(_make_inputs_require_grad)
 
-    # Gradient checkpointing + disable cache
+    # Disable cache; enable GC only if requested
     model.config.use_cache = False
-    try:
-        model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
-    except TypeError:
-        model.gradient_checkpointing_enable()
+    if enable_gc:
+        try:
+            model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+        except TypeError:
+            model.gradient_checkpointing_enable()
 
-    # ---- LoRA config (Qwen-style modules; make configurable if you swap families) ----
+    # LoRA config (for fresh adapters; if loading an existing adapter later, this can be ignored)
+    from peft import LoraConfig
     peft_cfg = LoraConfig(
         r=lora_r,
         lora_alpha=lora_alpha,
@@ -123,17 +138,19 @@ def setup_for_training(
         task_type="CAUSAL_LM",
         target_modules=[
             "q_proj", "k_proj", "v_proj", "o_proj",
-            "gate_proj", "up_proj", "down_proj"
+            "gate_proj", "up_proj", "down_proj",
         ],
     )
 
     return model, tokenizer, peft_cfg
 
-
+# -----------------------------
+# SFT training
+# -----------------------------
 def train_sft(
     tokenizer: AutoTokenizer,
     data_fpath: str,
-    model_fpath: str,
+    base_model_fpath: str,
     out_dir: str,
     use_4bit: bool,
     lora_r: int,
@@ -143,17 +160,16 @@ def train_sft(
     grad_accum: int,
     lr: float,
     epochs: int,
-    gpus: List[int],
 ):
-    # ---- Setup ----
+    # Enable GC for SFT (usually stable and saves memory)
     model, tokenizer, peft_cfg = setup_for_training(
         tokenizer,
-        model_fpath,
+        base_model_fpath,
         use_4bit,
         lora_r,
         lora_alpha,
         lora_dropout,
-        gpus,
+        enable_gc=True,
     )
 
     from trl import SFTTrainer, SFTConfig
@@ -169,41 +185,53 @@ def train_sft(
         gradient_accumulation_steps=grad_accum,
         learning_rate=lr,
         num_train_epochs=epochs,
-        gradient_checkpointing=True,
+        gradient_checkpointing=True,          # keep GC for SFT
+        ddp_find_unused_parameters=False,     # safer with adapters
         # eval + save cadence
         eval_strategy="steps",
-        eval_steps=5,
+        eval_steps=2,
         save_strategy="steps",
-        save_steps=5,
+        save_steps=2,
         save_total_limit=1,
-        load_best_model_at_end=True,
+        # load_best_model_at_end=True,
         metric_for_best_model="eval_loss",
         greater_is_better=False,
         logging_steps=1,
         logging_strategy="steps",
         report_to="tensorboard",
         remove_unused_columns=False,
-        completion_only_loss=True
+        completion_only_loss=True,
     )
+
+    last_checkpoint = None
+    if os.path.isdir(sft_cfg.output_dir):
+        last_checkpoint = get_last_checkpoint(sft_cfg.output_dir)
 
     trainer = SFTTrainer(
         model=model,
         args=sft_cfg,
         train_dataset=train_ds,
         eval_dataset=val_ds,
-        peft_config=peft_cfg,
+        peft_config=peft_cfg,     # create & train fresh LoRA
         processing_class=tokenizer,
     )
-    trainer.train()
-    trainer.save_model(out_dir)
+    trainer.train(resume_from_checkpoint=last_checkpoint)
+    trainer.save_model(out_dir)   # saves PEFT adapter (adapter_model.safetensors + adapter_config.json)
     tokenizer.save_pretrained(out_dir)
+
+    # Free GPUs
+    _free_cuda(trainer, model, peft_cfg, train_ds, val_ds)
+
     return out_dir
 
-
+# -----------------------------
+# DPO training
+# -----------------------------
 def train_dpo(
     tokenizer: AutoTokenizer,
     data_fpath: str,
-    model_fpath: str,
+    base_model_fpath: str,
+    init_adapter_dir: Optional[str],   # pass your SFT adapter dir here to start from SFT
     out_dir: str,
     use_4bit: bool,
     lora_r: int,
@@ -213,19 +241,28 @@ def train_dpo(
     grad_accum: int,
     lr: float,
     beta: float,
-    epochs: int,
-    gpus: List[int],
+    epochs: int
 ):
-    # ---- Setup ----
+    # IMPORTANT: Disable GC for DPO to avoid re-entrant backward on LoRA params
     model, tokenizer, peft_cfg = setup_for_training(
         tokenizer,
-        model_fpath,
+        base_model_fpath,
         use_4bit,
         lora_r,
         lora_alpha,
         lora_dropout,
-        gpus,
+        enable_gc=True,
     )
+
+    # If we want to start from SFT checkpoint (adapter), attach it here
+    from peft import PeftModel
+    use_existing_adapter = bool(init_adapter_dir) and os.path.exists(
+        os.path.join(init_adapter_dir, "adapter_config.json")
+    )
+    if use_existing_adapter:
+        logger.info(f"Loading PEFT adapter from {init_adapter_dir}")
+        model = PeftModel.from_pretrained(model, init_adapter_dir, is_trainable=True)
+        peft_cfg = None  # do NOT pass peft_config to trainer; model is already wrapped
 
     from trl import DPOTrainer, DPOConfig
 
@@ -244,20 +281,25 @@ def train_dpo(
         beta=beta,
         num_train_epochs=epochs,
         gradient_checkpointing=True,
+        ddp_find_unused_parameters=False,
         # eval + save cadence
         eval_strategy="steps",
-        eval_steps=5,
+        eval_steps=2,
         save_strategy="steps",
-        save_steps=5,
+        save_steps=2,
         save_total_limit=1,
-        load_best_model_at_end=True,
+        # load_best_model_at_end=True,
         metric_for_best_model="eval_loss",
         greater_is_better=False,
         logging_steps=1,
         logging_strategy="steps",
         report_to="tensorboard",
-        remove_unused_columns=False,
+        remove_unused_columns=False
     )
+
+    last_checkpoint = None
+    if os.path.isdir(dpo_cfg.output_dir):
+        last_checkpoint = get_last_checkpoint(dpo_cfg.output_dir)
 
     # ---- Trainer ----
     trainer = DPOTrainer(
@@ -265,42 +307,57 @@ def train_dpo(
         args=dpo_cfg,
         train_dataset=train_ds,
         eval_dataset=val_ds,
-        peft_config=peft_cfg,
+        peft_config=peft_cfg,  # None if we loaded an existing adapter; otherwise create fresh LoRA
         processing_class=tokenizer,
     )
-
-    trainer.train()
-    trainer.save_model(out_dir)
+    trainer.train(resume_from_checkpoint=last_checkpoint)
+    trainer.save_model(out_dir)  # saves (updated) adapter
     tokenizer.save_pretrained(out_dir)
     model.generation_config.save_pretrained(out_dir)
 
 
+def _free_cuda(*objs):
+    import gc, torch
+    for o in objs:
+        try:
+            del o
+        except Exception:
+            pass
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+
+
+# -----------------------------
+# Hydra entry
+# -----------------------------
 @hydra.main(version_base=None, config_path="../configs", config_name="config.yaml")
 def main(cfg: DictConfig) -> None:
-    # Tokenizer must match the student’s chat template (Qwen-7B-Instruct)
+    # Tokenizer must match the student’s chat template
     tokenizer = AutoTokenizer.from_pretrained(cfg.train.model_fpath, use_fast=True)
     if tokenizer.pad_token is None and tokenizer.eos_token is not None:
-        # Only fallback if truly missing
         tokenizer.pad_token = tokenizer.eos_token
-
-    # Prefer right padding for DPO training
     tokenizer.padding_side = "right"
     tokenizer.truncation_side = "right"
 
-    # SFT data jsonl (or json)
+    # SFT/DPO paths
     train_fpath_sft = os.path.join(
         str(cfg.paths.data),
         str(cfg.teacher.model),
         str(cfg.experiment.dataset),
-        f"{cfg.data.filename}_sft.jsonl"
+        f"{cfg.student.model}_on_{cfg.data.filename}_cot_sft_dagger.jsonl"
+        if cfg.experiment.cot
+        else f"{cfg.student.model}_on_{cfg.data.filename}_sft_dagger.jsonl"
     )
 
-    # DPO data jsonl (or json)
     train_fpath_dpo = os.path.join(
         str(cfg.paths.data),
         str(cfg.teacher.model),
         str(cfg.experiment.dataset),
-        f"{cfg.data.filename}_rlhf.jsonl"
+        f"{cfg.student.model}_on_{cfg.data.filename}_cot_rlhf_dagger.jsonl"
+        if cfg.experiment.cot
+        else f"{cfg.student.model}_on_{cfg.data.filename}_rlhf_dagger.jsonl"
     )
 
     ckpt_dir_sft = os.path.join(
@@ -325,39 +382,37 @@ def main(cfg: DictConfig) -> None:
 
     # SFT
     train_sft(
-        tokenizer,
-        train_fpath_sft,
-        cfg.train.model_fpath,
-        ckpt_dir_sft,
-        cfg.train.use_4bit,
-        cfg.train.lora_r,
-        cfg.train.lora_alpha,
-        cfg.train.lora_dropout,
-        cfg.train.batch_size,
-        cfg.train.grad_accum,
-        cfg.train.lr,
-        cfg.train.epochs,
-        cfg.train.gpus,
+        tokenizer=tokenizer,
+        data_fpath=train_fpath_sft,
+        base_model_fpath=cfg.train.model_fpath,
+        out_dir=ckpt_dir_sft,
+        use_4bit=cfg.train.sft_use_4bit,
+        lora_r=cfg.train.lora_r,
+        lora_alpha=cfg.train.lora_alpha,
+        lora_dropout=cfg.train.lora_dropout,
+        batch_size=cfg.train.sft_batch_size,
+        grad_accum=cfg.train.grad_accum,
+        lr=cfg.train.sft_lr,
+        epochs=cfg.train.sft_epochs
     )
 
-    # DPO
+    # DPO (start from SFT adapter)
     train_dpo(
         tokenizer,
         train_fpath_dpo,
-        ckpt_dir_sft,
-        ckpt_dir_dpo,
-        cfg.train.use_4bit,
-        cfg.train.lora_r,
-        cfg.train.lora_alpha,
-        cfg.train.lora_dropout,
-        cfg.train.batch_size,
-        cfg.train.grad_accum,
-        cfg.train.lr,
-        cfg.train.beta,
-        cfg.train.epochs,
-        cfg.train.gpus
+        base_model_fpath=cfg.train.model_fpath,
+        init_adapter_dir=ckpt_dir_sft,
+        out_dir=ckpt_dir_dpo,
+        use_4bit=cfg.train.rlhf_use_4bit,
+        lora_r=cfg.train.lora_r,
+        lora_alpha=cfg.train.lora_alpha,
+        lora_dropout=cfg.train.lora_dropout,
+        batch_size=cfg.train.rlhf_batch_size,
+        grad_accum=cfg.train.grad_accum,
+        lr=cfg.train.rlhf_lr,
+        beta=cfg.train.beta,
+        epochs=cfg.train.rlhf_epochs
     )
-
 
 if __name__ == "__main__":
     os.environ["HYDRA_FULL_ERROR"] = "1"
