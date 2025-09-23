@@ -1,4 +1,5 @@
 import os
+import random
 import json
 import logging
 from typing import Any, List, Dict, Tuple
@@ -39,6 +40,7 @@ def run_problem(
     assessment_turn: int,
     start_from_turn: int = 1,
     total_turns: int = 10,
+    eps: float=0.2,
     use_cot: bool = False,
     is_ood: bool = False,
 ) -> Tuple[
@@ -72,7 +74,7 @@ def run_problem(
         cur_start = 1
         logger.warning(f"[{pid}] resume requested but no transcript found; starting fresh")
 
-    pairs = []
+    pairs, chosen_list = [], []
     for turn in range(cur_start, total_turns, 2):
         # Optional assessment injected into previous text
         if assessment_turn > 0 and turn == assessment_turn and len(texts) > 0:
@@ -95,7 +97,7 @@ def run_problem(
             data_type,
             student_client,
             student_name,
-            student_temperature,
+            0.8,
             use_cot
         )
         total_student_prompt_tks += p_tks
@@ -108,11 +110,11 @@ def run_problem(
                 False,
                 texts + [student_reply],
                 interaction_problem,
-                num_samples,
+                1,
                 data_type,
                 teacher_client,
                 teacher_name,
-                teacher_temperature,
+                0.8,
                 use_cot
             )
             teacher_replies.append(teacher_reply[0])
@@ -131,7 +133,7 @@ def run_problem(
                 student_temperature,
                 evaluation_problem,
                 k_values,
-                num_samples,
+                max(k_values),
                 is_ood
             )
 
@@ -150,13 +152,32 @@ def run_problem(
         max_value = max([s[pass_k] for s in pass_at_k_scores])
         best_idx = [s[pass_k] for s in pass_at_k_scores].index(max_value)
         best_pass_at_k_score = pass_at_k_scores[best_idx]
-        if max_value == 0:
+
+        # Update the chat with the best reply for next turns
+        if random.random() < 1 - eps:
+            texts += [student_replies[best_idx], teacher_replies[best_idx]]
+            propensity = 1 - eps
+        else:
+            non_best = [i for i in range(num_samples) if i != best_idx]
+            idx = random.choice(non_best)
+            texts += [student_replies[idx], teacher_replies[idx]]
+            propensity = eps / num_samples
+
+        # Don't train on sub-optimal trajectories
+        if max_value < 1 - eps:
             continue
 
         # Append chosen and rejected pairs
         chosen = student_replies[best_idx]
+        chosen_list.append({
+            "prompt": prompt,
+            "response": chosen,
+            "problem": evaluation_problem,
+            "turn": turn,
+            "propensity": propensity
+        })
         for score, reply in zip(pass_at_k_scores, student_replies):
-            if score[pass_k] < best_pass_at_k_score[pass_k] and reply != chosen:
+            if best_pass_at_k_score[pass_k] - score[pass_k] >= 0.2 and reply != chosen:
                 pairs.append({
                     "prompt": prompt,
                     "chosen_response": chosen,
@@ -167,12 +188,10 @@ def run_problem(
                     "turn": turn
                 })
 
-        # Update the chat with the best reply for next turns
-        texts += [student_replies[best_idx], teacher_replies[best_idx]]
-
         logger.debug(f"pid-{evaluation_problem["id"]} turn-{turn} pass@k={best_pass_at_k_score}")
 
     return (
+        chosen_list,
         pairs,
         total_teacher_prompt_tks,
         total_teacher_completion_tks,
@@ -191,32 +210,33 @@ def main(cfg: DictConfig) -> None:
         str(cfg.paths.data),
         str(cfg.teacher.model),
         str(cfg.experiment.dataset),
-        f"{cfg.data.filename}_sft.jsonl"
+        f"{cfg.student.model}_on_{cfg.data.filename}_cot_sft_dagger.jsonl" if cfg.experiment.cot else f"{cfg.student.model}_on_{cfg.data.filename}_sft_dagger.jsonl"
     )
     train_fpath_rlhf = os.path.join(
         str(cfg.paths.data),
         str(cfg.teacher.model),
         str(cfg.experiment.dataset),
-        f"{cfg.data.filename}_rlhf.jsonl"
+        f"{cfg.student.model}_on_{cfg.data.filename}_cot_rlhf_dagger.jsonl" if cfg.experiment.cot else f"{cfg.student.model}_on_{cfg.data.filename}_rlhf_dagger.jsonl"
     )
 
     existing_pids = set()
-
+    count_rlhf, count_sft = 0, 0
     if os.path.exists(train_fpath_sft):
         with open(train_fpath_sft, "r") as f:
             for line in f:
-                ex = json.loads(line)
-                existing_pids.add(ex["problem"]["id"])
+                count_sft += 1
+                if ex["dagger_iter"] == cfg.gen.dagger_iter:
+                    existing_pids.add(ex["problem"]["id"])
 
-        logger.info(f"Loaded {len(existing_pids)} existing SFT examples from {train_fpath_sft}")
+        logger.info(f"Loaded {len(existing_pids)} existing SFT-{cfg.gen.dagger_iter} examples from {train_fpath_sft}")
 
     if os.path.exists(train_fpath_rlhf):
         with open(train_fpath_rlhf, "r") as f:
             for line in f:
                 ex = json.loads(line)
-                existing_pids.add(ex["problem"]["id"])
-
-        logger.info(f"Loaded {len(existing_pids)} existing RLHF examples from {train_fpath_rlhf}")
+                count_rlhf += 1
+                if ex["dagger_iter"] == cfg.gen.dagger_iter:
+                    existing_pids.add(ex["problem"]["id"])
 
     # Load problems
     problems_fpath = os.path.join(
@@ -227,11 +247,10 @@ def main(cfg: DictConfig) -> None:
     )
     logger.info(f"Loading interaction problems: {problems_fpath}")
     with open(problems_fpath, "r") as f:
-        data = json.load(f)["collected"][100:]  
+        data: List[Dict[str, Any]] = json.load(f)["collected"][100:]
     interaction_problems: List[Dict[str, Any]] = [
         p for p in data if p["id"] not in existing_pids
-    ]
-    interaction_problems = sorted(interaction_problems, key=lambda x: x["id"])[: cfg.data.data_amount]
+    ][: cfg.data.data_amount]
     logger.info(f"Total interaction problems: {len(interaction_problems)}")
 
     # OOD problems
@@ -247,13 +266,20 @@ def main(cfg: DictConfig) -> None:
         logger.info(f"Loading evaluation (OOD) problems: {ood_problems_path}")
         with open(ood_problems_path, "r") as f:
             data = json.load(f)[100:]
-            evaluation_problems = [p for p in data if p["id"] not in existing_pids]
-        evaluation_problems = sorted(evaluation_problems, key=lambda x: x["id"])[: cfg.data.data_amount]
+            evaluation_problems = [
+                p for p in data if p["id"] not in existing_pids
+            ][: cfg.data.data_amount]
+
         logger.info(f"Total evaluation (OOD) problems: {len(evaluation_problems)}")
 
     # Build clients
-    teacher_name, teacher_client = build_client(cfg.teacher.model)
-    student_name, student_client = build_client(cfg.student.model)
+    teacher_name, teacher_client = build_client(
+        cfg.teacher.model, cfg.teacher.fpath, cfg.teacher.server
+    )
+    student_name, student_client = build_client(
+        cfg.student.model, cfg.student.fpath, cfg.student.server
+    )
+    logger.info("Teacher=%s | Student=%s", teacher_name, student_name)
 
     total_teacher_prompt_tks = total_teacher_completion_tks = 0
     total_student_prompt_tks = total_student_completion_tks = 0
@@ -261,7 +287,6 @@ def main(cfg: DictConfig) -> None:
     f_rlhf = open(train_fpath_rlhf, "a" if os.path.exists(train_fpath_rlhf) else "w")
     f_sft = open(train_fpath_sft, "a" if os.path.exists(train_fpath_sft) else "w")
 
-    count_rlhf, count_sft = 0, 0
     # Build pairs
     with ThreadPoolExecutor(max_workers=cfg.experiment.num_workers) as executor:
         # collect all the jobs
@@ -284,13 +309,15 @@ def main(cfg: DictConfig) -> None:
                 cfg.experiment.assessment_turn,
                 cfg.experiment.start_from_turn,
                 cfg.experiment.total_turns,
+                cfg.gen.eps,
                 cfg.experiment.cot,
                 cfg.experiment.ood
             ))
 
         for future in tqdm(as_completed(futures), total=len(futures), desc="Processing problems"):
             (
-                pairs, 
+                chosen,
+                pairs,
                 teacher_prompt_tks, 
                 teacher_completion_tks, 
                 student_prompt_tks, 
@@ -300,18 +327,14 @@ def main(cfg: DictConfig) -> None:
             # Save RLHF jsonl (or json) incrementally
             count_rlhf += len(pairs)
             for ex in pairs:
+                ex["dagger_iter"] = cfg.gen.dagger_iter
                 f_rlhf.write(json.dumps(ex, ensure_ascii=False) + "\n")
-            
+
             # Save SFT jsonl (or json) incrementally
-            if pairs:
-                data = {
-                    "prompt": pairs[0]["prompt"],
-                    "response": pairs[0]["chosen_response"],
-                    "problem": pairs[0]["problem"],
-                    "turn": pairs[0]["turn"]
-                }
-                count_sft += 1
-                f_sft.write(json.dumps(data, ensure_ascii=False) + "\n")
+            count_sft += len(chosen)
+            for ex in chosen:
+                ex["dagger_iter"] = cfg.gen.dagger_iter
+                f_sft.write(json.dumps(ex, ensure_ascii=False) + "\n")
 
             total_teacher_prompt_tks += teacher_prompt_tks
             total_teacher_completion_tks += teacher_completion_tks
