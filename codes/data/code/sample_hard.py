@@ -31,7 +31,8 @@ from omegaconf import DictConfig
 from openai import OpenAI
 from tqdm import tqdm
 
-from codes.evaluation.code import evaluate_code_completion, generate_code_completions
+from codes.evaluation.code import evaluate_code_completion
+from codes.evaluation.code import generate_code_completions
 from codes.evaluation.utils import compute_pass_at_k
 from codes.llm_utils import build_client
 
@@ -355,15 +356,21 @@ def main(cfg: DictConfig) -> None:
         openai_key = f.read().strip()
     os.environ["OPENAI_API_KEY"] = openai_key
 
+    os.environ["CUDA_VISIBLE_DEVICES"] = ",".join([str(g) for g in cfg.train.gpus])
+
     # Build teacher and student clients (names may be normalized inside)
-    teacher_name, teacher_client = build_client(str(cfg.teacher.model))
-    student_name, student_client = build_client(str(cfg.student.model))
+    teacher_name, teacher_client = build_client(
+        cfg.teacher.fpath if cfg.teacher.fpath else str(cfg.teacher.model)
+    )
+    student_name, student_client = build_client(
+        cfg.student.fpath if cfg.student.fpath else str(cfg.student.model)
+    )
     logger.info("Teacher=%s | Student=%s", teacher_name, student_name)
 
     # Output path: data/<teacher.model>/<dataset>/<student.model>.json
     teacher_dir = os.path.join(cfg.paths.data, cfg.teacher.model, cfg.experiment.dataset)
     os.makedirs(teacher_dir, exist_ok=True)
-    output_fpath = os.path.join(teacher_dir, f"{cfg.student.model}.json")
+    output_fpath = os.path.join(teacher_dir, f"test_{cfg.student.model}.json")
 
     # Resume (supports new dict format and legacy list format)
     collected: List[ProblemDict] = []
