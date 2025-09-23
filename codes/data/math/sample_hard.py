@@ -192,9 +192,13 @@ def main(cfg: DictConfig) -> None:
         openai_key = f.read().strip()
     os.environ["OPENAI_API_KEY"] = openai_key
 
-    # Build clients (nicknames are fine; build_client may normalize IDs)
-    teacher_name, teacher_client = build_client(str(cfg.teacher.model))
-    student_name, student_client = build_client(str(cfg.student.model))
+    # Build teacher and student clients (names may be normalized inside)
+    teacher_name, teacher_client = build_client(
+        cfg.teacher.fpath if cfg.teacher.fpath else str(cfg.teacher.model)
+    )
+    student_name, student_client = build_client(
+        cfg.student.fpath if cfg.student.fpath else str(cfg.student.model)
+    )
     logger.info("Teacher=%s | Student=%s", teacher_name, student_name)
 
     # Output path under data/<teacher.model>/<dataset>/<student.model>.json
@@ -236,10 +240,9 @@ def main(cfg: DictConfig) -> None:
                 continue
 
             problem = organize_gsm_row(row)
-            pid = int(problem["id"])
 
             # Skip already seen or blacklisted IDs
-            if pid in student_ids or pid in teacher_blacklist:
+            if problem["id"] in student_ids or problem["id"] in teacher_blacklist:
                 continue
 
             future_to_pid[
@@ -256,23 +259,30 @@ def main(cfg: DictConfig) -> None:
                     int(cfg.gen.num_samples),
                     float(cfg.gen.pass_at_k_threshold)
                 )
-            ]
+            ] = problem
 
         for future in tqdm(as_completed(future_to_pid), total=len(future_to_pid), desc="Curating"):
             result, p_tks, c_tks = future.result()
-            pid = future_to_pid[future]
+            problem = future_to_pid[future]
 
             if result == GOOD_PROBLEM:
-                collected.append(pid)
-            
+                collected.append(problem)
+                student_ids.add(problem["id"])
+
             elif result == STUDENT_BLACKLIST:
-                student_ids.add(pid)
-            
+                student_ids.add(problem["id"])
+
             elif result == TEACHER_BLACKLIST:
-                teacher_blacklist.add(pid)
+                teacher_blacklist.add(problem["id"])
 
             total_prompt_tks += p_tks
             total_completion_tks += c_tks
+
+            if len(collected) >= cfg.data.data_amount:
+                # Cancel pending futures
+                for fut in future_to_pid:
+                    fut.cancel()
+                break
 
     # Final save
     with open(output_fpath, "w") as f:
