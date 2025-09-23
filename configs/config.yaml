@@ -1,22 +1,32 @@
 paths:
   openai_api_key_fpath: /home/ambati/.openai_api_key.zshrc      # path to OpenAI API key
-  data: /playpen-hdd/ambati/interact_plus/data/                 # path to data
-  experiments: /playpen-hdd/ambati/interact_plus/experiments/   # path to save experiment results
+  data: /playpen-ssd/ambati/interact_plus/data/                 # path to data
+  experiments: /playpen-ssd/ambati/interact_plus/experiments/   # path to save experiment results
 
 # Model
 teacher:
   model: gpt-4o
+  fpath:
   temperature: 0.3
+  server: True      # whether to use server+OpenAI client or load through LLM()
 
 student:
   model: qwen7
+  fpath: /playpen-ssd/pretrained_models/models--Qwen--Qwen2.5-7B-Instruct/snapshots/a09a35458c702b33eeacc393d103063234e8bc28/
   temperature: 0.3
+  server: True      # whether to use server+OpenAI client or load through LLM()  
+
+guide:
+  model: qwen30
+  fpath:
+  temperature: 0.3
+  server: True
 
 # Data & paths
 data:
   type: code                    # code or math
   filename: qwen7
-  data_amount: 200
+  data_amount: 500
 
 # Generation / evaluation
 gen:
@@ -24,34 +34,40 @@ gen:
   num_samples: 10
   pass_k: 5
   pass_at_k_threshold: 0.75
+  eps: 0.1                      # epsilon-greedy exploration
   retry_on_fail: 5
   take_every: 3                 # only used for math dataset
+  dagger_iter: 2                # DAgger iteration
 
 # Direct Preference Optimization (DPO) settings
 train:
-  model_fpath: /playpen-hdd/shared/pretrained_models/Qwen/models--Qwen--Qwen2.5-7B-Instruct/snapshots/a09a35458c702b33eeacc393d103063234e8bc28/
+  model_fpath: /playpen-ssd/pretrained_models/models--Qwen--Qwen2.5-7B-Instruct/snapshots/a09a35458c702b33eeacc393d103063234e8bc28/
   split: 0.8
-  use_4bit: True
+  sft_use_4bit: False
+  rlhf_use_4bit: True
   lora_r: 16
   lora_alpha: 32
   lora_dropout: 0.05
-  batch_size: 6
+  sft_batch_size: 4
+  rlhf_batch_size: 2
   grad_accum: 8
-  lr: 5e-6
-  beta: 0.1
-  epochs: 10
-  gpus: [1]
+  sft_lr: 1e-4
+  rlhf_lr: 1e-5
+  beta: 0.2
+  sft_epochs: 2
+  rlhf_epochs: 2
+  gpus: [0]
 
 # Experiment settings
 experiment:
-  name: selfguided
+  name: test_selfguided_eps_all
   cot: False
   ood: False
-  dataset: humaneval_opc        # code - humaneval_opc/mbpp, math - gsm
+  dataset: humaneval_opc        # code - humaneval_opc/mbpp, math - gsm8k
   assessment_turn: -1           # -1 (none), 1 (pre), 5 (mid)
   start_from_turn: 1            # 1 (new), odd (student), even (teacher)
   total_turns: 11
-  num_workers: 16
+  num_workers: 64
 
 hydra:
   run:
