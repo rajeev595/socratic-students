@@ -36,6 +36,7 @@ from codes.data.utils import (
     remove_think_tags,
 )
 from codes.prompts.code import CODE_GENERATION_PROMPT
+from codes.llm_utils import chat_complete
 
 
 # ---------------------------
@@ -45,12 +46,12 @@ from codes.prompts.code import CODE_GENERATION_PROMPT
 def generate_code_completions(
     previous_conversation_str: str,
     client,
-    model_name: str,
+    model_name,
     temperature: float,
     problem_dict: Dict[str, Any],
     num_samples: int,
     max_tokens: int = 2048,
-    show_gt: bool = False,
+    show_gt: bool = False
 ) -> Tuple[List[str], int, int]:
     """
     Generate `num_samples` code completions and post-process to extract clean code.
@@ -93,16 +94,14 @@ def generate_code_completions(
     ]
 
     # 3) Single API call with n = num_samples
-    resp = client.chat.completions.create(
-        model=model_name,
+    raw_texts, prompt_tks, completion_tks = chat_complete(
+        client=client,
+        model_name=model_name,
         messages=messages,
         n=num_samples,
         temperature=temperature,
-        max_tokens=max_tokens,
+        max_tokens=max_tokens
     )
-    raw_texts = [(ch.message.content or "").strip() for ch in resp.choices]
-    prompt_tks = int(getattr(resp.usage, "prompt_tokens", 0) or 0)
-    completion_tks = int(getattr(resp.usage, "completion_tokens", 0) or 0)
 
     # 4) Post-process each completion into a code string
     outputs: List[str] = []
@@ -174,7 +173,10 @@ def evaluate_code_completion(
     full_code = (problem["solution"] if sanity_check else prompt + code_block) + "\n\n" + problem["test"]
 
     # Create temp file
-    f = tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False)
+    f = tempfile.NamedTemporaryFile(
+        suffix=".py", mode="w", delete=False, 
+        # dir="/playpen-hdd/ambati/temp/"
+    )
     temp_file_path = f.name
     f.write(full_code)
     f.close()
