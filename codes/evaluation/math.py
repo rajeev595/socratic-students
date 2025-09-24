@@ -173,11 +173,27 @@ def evaluate_math_completion(model_response: str, problem: Dict[str, Any]) -> Tu
     messages = [{"role": "user", "content": prompt}]
 
     client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=messages,
-        temperature=0.0,
-        max_tokens=16,
+    response = client.responses.create(
+        model="gpt-5-nano",
+        input=messages,
+        reasoning={"effort": "minimal"},
+        text={"verbosity": "low"},
     )
-    gpt_reply = (response.choices[0].message.content or "").strip().lower()
+    out = ""
+    for item in response.output:
+        if hasattr(item, "content"):
+            if item.content:
+                for c in item.content:
+                    if hasattr(c, "text"):
+                        out += c.text
+
+    gpt_reply = out.strip().lower()
+
+    # response = client.chat.completions.create(
+    #     model="gpt-4o-mini",
+    #     messages=messages,
+    #     temperature=0.0,
+    #     max_tokens=16,
+    # )    
+    # gpt_reply = (response.choices[0].message.content or "").strip().lower()
     return model_response, gpt_reply.startswith("yes")
