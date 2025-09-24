@@ -189,15 +189,15 @@ def train_sft(
         ddp_find_unused_parameters=False,     # safer with adapters
         # eval + save cadence
         eval_strategy="steps",
-        eval_steps=2,
+        eval_steps=10,
         save_strategy="steps",
-        save_steps=2,
+        save_steps=10,
         save_total_limit=1,
         # load_best_model_at_end=True,
         metric_for_best_model="eval_loss",
         greater_is_better=False,
-        logging_steps=1,
         logging_strategy="steps",
+        logging_steps=5,
         report_to="tensorboard",
         remove_unused_columns=False,
         completion_only_loss=True,
@@ -284,15 +284,15 @@ def train_dpo(
         ddp_find_unused_parameters=False,
         # eval + save cadence
         eval_strategy="steps",
-        eval_steps=2,
+        eval_steps=10,
         save_strategy="steps",
-        save_steps=2,
+        save_steps=10,
         save_total_limit=1,
         # load_best_model_at_end=True,
         metric_for_best_model="eval_loss",
         greater_is_better=False,
-        logging_steps=1,
         logging_strategy="steps",
+        logging_steps=5,
         report_to="tensorboard",
         remove_unused_columns=False
     )
