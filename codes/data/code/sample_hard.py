@@ -17,10 +17,11 @@ Notes
 
 from __future__ import annotations
 
+import os
 import json
 import logging
-import os
 import subprocess
+from random import shuffle
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Set, Tuple, TypedDict
 
@@ -360,17 +361,17 @@ def main(cfg: DictConfig) -> None:
 
     # Build teacher and student clients (names may be normalized inside)
     teacher_name, teacher_client = build_client(
-        cfg.teacher.fpath if cfg.teacher.fpath else str(cfg.teacher.model)
+        cfg.teacher.model, cfg.teacher.fpath, cfg.teacher.server
     )
     student_name, student_client = build_client(
-        cfg.student.fpath if cfg.student.fpath else str(cfg.student.model)
+        cfg.student.model, cfg.student.fpath, cfg.student.server
     )
     logger.info("Teacher=%s | Student=%s", teacher_name, student_name)
 
     # Output path: data/<teacher.model>/<dataset>/<student.model>.json
     teacher_dir = os.path.join(cfg.paths.data, cfg.teacher.model, cfg.experiment.dataset)
     os.makedirs(teacher_dir, exist_ok=True)
-    output_fpath = os.path.join(teacher_dir, f"test_{cfg.student.model}.json")
+    output_fpath = os.path.join(teacher_dir, f"{cfg.student.model}.json")
 
     # Resume (supports new dict format and legacy list format)
     collected: List[ProblemDict] = []
@@ -380,14 +381,10 @@ def main(cfg: DictConfig) -> None:
     if os.path.exists(output_fpath):
         with open(output_fpath) as f:
             data = json.load(f)
-        if isinstance(data, list):
-            # Legacy format: only the collected problems
-            collected = data  # type: ignore[assignment]
-        else:
-            # New structured format
-            collected = data.get("collected", [])
-            teacher_blacklist = set(data.get("teacher_blacklist", []))
-            student_ids = set(data.get("student_ids", []))
+
+        collected = data.get("collected", [])
+        teacher_blacklist = set(data.get("teacher_blacklist", []))
+        student_ids = set(data.get("student_ids", []))
         logger.info(
             "Resuming from %d problems in %s | teacher_blacklist=%d, student_processed=%d",
             len(collected), output_fpath, len(teacher_blacklist), len(student_ids)
@@ -462,6 +459,20 @@ def main(cfg: DictConfig) -> None:
             total_prompt_tks += p_tks
             total_completion_tks += c_tks
 
+            # Save every 25 examples
+            if len(collected) > 0 and len(collected) % 25 == 0:
+                with open(output_fpath, "w") as f:
+                    json.dump(
+                        {
+                            "collected": collected,
+                            "teacher_blacklist": sorted(teacher_blacklist),
+                            "student_ids": sorted(student_ids),
+                        },
+                        f,
+                        indent=2,
+                    )
+                logger.info("Collected %d/%d samples!", len(collected), cfg.data.data_amount)
+
             if len(collected) >= cfg.data.data_amount:
                 # Cancel pending futures
                 for fut in future_to_pid:
@@ -482,6 +493,28 @@ def main(cfg: DictConfig) -> None:
 
     logger.info("Saved %d problems to %s", len(collected), output_fpath)
     logger.info("Token usage (approx): prompt=%d, completion=%d", total_prompt_tks, total_completion_tks)
+
+    # Train-Test split
+    shuffle(collected)
+    total_num = len(collected)
+
+    train_fpath = os.path.join(teacher_dir, f"{cfg.student.model}_train.json")
+    with open(train_fpath, "w") as f:
+        json.dump(
+            collected[: total_num // 2],
+            f,
+            indent=2,
+        )
+    logger.info("Train-split: %d problems at %s", total_num // 2, train_fpath)
+
+    test_fpath = os.path.join(teacher_dir, f"{cfg.student.model}_test.json")
+    with open(test_fpath, "w") as f:
+        json.dump(
+            collected[total_num // 2: ],
+            f,
+            indent=2,
+        )
+    logger.info("Train-split: %d problems at %s", total_num - total_num // 2, test_fpath)
 
 
 if __name__ == "__main__":
