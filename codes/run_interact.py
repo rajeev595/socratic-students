@@ -391,12 +391,11 @@ def main(cfg: DictConfig) -> None:
         str(cfg.paths.data),
         str(cfg.teacher.model),
         dataset,
-        f"{cfg.data.filename}.json",
+        f"{cfg.data.filename}_test.json",
     )
     logger.info(f"Loading interaction problems: {problems_fpath}")
     with open(problems_fpath, "r") as f:
-        data = json.load(f)
-    interaction_problems: List[Dict[str, Any]] = data["collected"]
+        interaction_problems: List[Dict[str, Any]] = json.load(f)
     interaction_problems = sorted(interaction_problems, key=lambda x: x["id"])[len(all_results): cfg.data.data_amount]
     logger.info(f"Total interaction problems: {len(interaction_problems)}")
 
@@ -407,7 +406,7 @@ def main(cfg: DictConfig) -> None:
             str(cfg.paths.data),
             str(cfg.teacher.model),
             dataset,
-            f"{cfg.data.filename}_ood.json",
+            f"{cfg.data.filename}_ood_test.json",
         )
 
         logger.info(f"Loading evaluation (OOD) problems: {ood_problems_path}")
