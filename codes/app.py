@@ -339,7 +339,7 @@ def plot_passk_per_model(df_all: pd.DataFrame, student: str, k_val: int, exp_col
             mean_c="min(1, max(0, datum.mean))",
         )
         .encode(
-            x=alt.X("turn:Q", title="Turn"),
+            x=alt.X("turn:Q", title="Turn", axis=alt.Axis(values=[1, 3, 5, 7, 9, 11])),
             y=alt.Y("mean_c:Q", title=f"pass@{k_val}", scale=alt.Scale(domain=[0, 1], nice=False)),
             color=alt.Color("experiment:N", title="Experiment", scale=color_scale),
         )
