@@ -264,7 +264,7 @@ def run_problem(
                 data_type,
                 student_client,
                 student_name,
-                student_temperature,
+                0.3,
                 evaluation_problem,
                 k_values,
                 num_samples,
@@ -396,7 +396,7 @@ def main(cfg: DictConfig) -> None:
     logger.info(f"Loading interaction problems: {problems_fpath}")
     with open(problems_fpath, "r") as f:
         interaction_problems: List[Dict[str, Any]] = json.load(f)
-    interaction_problems = sorted(interaction_problems, key=lambda x: x["id"])[len(all_results): cfg.data.data_amount]
+    interaction_problems = interaction_problems[len(all_results): cfg.data.data_amount]
     logger.info(f"Total interaction problems: {len(interaction_problems)}")
 
     # OOD problems
@@ -412,7 +412,7 @@ def main(cfg: DictConfig) -> None:
         logger.info(f"Loading evaluation (OOD) problems: {ood_problems_path}")
         with open(ood_problems_path, "r") as f:
             evaluation_problems = json.load(f)
-        evaluation_problems = sorted(evaluation_problems, key=lambda x: x["id"])[len(all_results): cfg.data.data_amount]
+        evaluation_problems = evaluation_problems[len(all_results): cfg.data.data_amount]
         logger.info(f"Total evaluation (OOD) problems: {len(evaluation_problems)}")
 
     # Build teacher and student clients (names may be normalized inside)
