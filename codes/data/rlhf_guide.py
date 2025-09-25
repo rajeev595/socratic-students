@@ -101,7 +101,7 @@ def run_problem(
             data_type,
             student_client,
             student_name,
-            0.8,
+            student_temperature,
             use_cot
         )
         total_student_prompt_tks += p_tks
@@ -116,7 +116,7 @@ def run_problem(
             data_type,
             guide_client,
             guide_name,
-            0.8,
+            guide_temperature,
             use_cot
         )
         total_guide_prompt_tks += p_tks
@@ -135,7 +135,7 @@ def run_problem(
                 data_type,
                 teacher_client,
                 teacher_name,
-                0.8,
+                teacher_temperature,
                 use_cot
             )
             teacher_replies.append(teacher_reply[0])
@@ -151,7 +151,7 @@ def run_problem(
                 data_type,
                 student_client,
                 student_name,
-                student_temperature,
+                0.3,
                 evaluation_problem,
                 k_values,
                 max(k_values),
@@ -273,12 +273,11 @@ def main(cfg: DictConfig) -> None:
         str(cfg.paths.data),
         str(cfg.teacher.model),
         str(cfg.experiment.dataset),
-        f"{cfg.data.filename}.json",
+        f"{cfg.data.filename}_train.json",
     )
     logger.info(f"Loading interaction problems: {problems_fpath}")
     with open(problems_fpath, "r") as f:
-        data: List[Dict[str, Any]] = json.load(f)["collected"][100:]  
-    data = sorted(data, key=lambda x: x["id"])[: cfg.data.data_amount]
+        data: List[Dict[str, Any]] = json.load(f)
     interaction_problems = [
         p for p in data if p["id"] not in existing_pids
     ][: cfg.data.data_amount]
@@ -291,13 +290,12 @@ def main(cfg: DictConfig) -> None:
             str(cfg.paths.data),
             str(cfg.teacher.model),
             str(cfg.experiment.dataset),
-            f"{cfg.data.filename}_ood.json",
+            f"{cfg.data.filename}_ood_train.json",
         )
 
         logger.info(f"Loading evaluation (OOD) problems: {ood_problems_path}")
         with open(ood_problems_path, "r") as f:
-            data = json.load(f)[100:]
-        data = sorted(data, key=lambda x: x["id"])[: cfg.data.data_amount]
+            data = json.load(f)
         evaluation_problems = [
             p for p in data if p["id"] not in existing_pids
         ][: cfg.data.data_amount]

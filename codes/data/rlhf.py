@@ -97,7 +97,7 @@ def run_problem(
             data_type,
             student_client,
             student_name,
-            0.8,
+            student_temperature,
             use_cot
         )
         total_student_prompt_tks += p_tks
@@ -114,7 +114,7 @@ def run_problem(
                 data_type,
                 teacher_client,
                 teacher_name,
-                0.8,
+                teacher_temperature,
                 use_cot
             )
             teacher_replies.append(teacher_reply[0])
@@ -130,7 +130,7 @@ def run_problem(
                 data_type,
                 student_client,
                 student_name,
-                student_temperature,
+                0.3,
                 evaluation_problem,
                 k_values,
                 max(k_values),
