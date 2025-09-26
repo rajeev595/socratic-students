@@ -10,7 +10,6 @@ from typing import Dict, Any, List, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import json
-import numpy as np
 from tqdm import tqdm
 import hydra
 from omegaconf import DictConfig
@@ -22,7 +21,7 @@ from codes.data.utils import remove_think_tags, msgs_to_string, format_messages
 from codes.prompts.utils import _select_sys_prompt, _problem_greeting
 from codes.evaluation.code import generate_code_completions, evaluate_code_completion
 from codes.evaluation.math import generate_math_completions, evaluate_math_completion
-from codes.evaluation.utils import compute_pass_at_k
+from codes.evaluation.utils import compute_pass_at_k, bootstrap_aggregate
 
 
 logger = logging.getLogger(__name__)
@@ -475,16 +474,8 @@ def main(cfg: DictConfig) -> None:
             total_student_prompt_tks += student_prompt_tks
             total_student_completion_tks += student_completion_tks
 
-    # Aggregate mean/std across problems
-    avg_results: Dict[int, Dict[int, Tuple[float, float]]] = {
-        turn: {k: (0.0, 0.0) for k in k_values} for turn in range(start_from_turn, total_turns + 1, 2)
-    }
-    for turn, turn_scores in turn_results.items():
-        for k in k_values:
-            vals = [d[k] for d in turn_scores] if turn_scores else [0.0]
-            avg_k = float(round(np.mean(vals), 3))
-            std_k = float(round(np.std(vals), 3))
-            avg_results[turn][k] = (avg_k, std_k)
+    # compute bootstrapped aggregate results
+    avg_results = bootstrap_aggregate(all_results)
 
     # Save per-problem statistics and aggregate
     os.makedirs(exp_dir, exist_ok=True)
