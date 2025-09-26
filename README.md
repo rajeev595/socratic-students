@@ -12,9 +12,12 @@ codes/
 │  ├─ code/
 │  │  ├─ generate_ood.py      # Generate OOD code problems via teacher prompting
 │  │  └─ sample_hard.py       # Curate hard in-distribution code problems
-│  └─ math/
-│     ├─ generate_ood.py      # Build OOD math split (e.g., GSM8K+ alt variants)
-│     └─ sample_hard.py       # Curate hard in-distribution math problems
+│  ├─ math/
+│  │  ├─ generate_ood.py      # Build OOD math split (e.g., GSM8K+ alt variants)
+│  │  └─ sample_hard.py       # Curate hard in-distribution math problems
+│  ├─ rlhf.py                 # Collected SFT, DPO data for self-guided learning
+│  └─ rlhf_guide.py           # Collected SFT, DPO data for peer-guided learning
+│
 ├─ evaluation/
 │  ├─ code.py                 # Code generation/evaluation utilities
 │  ├─ math.py                 # Math generation/evaluation utilities
@@ -24,9 +27,10 @@ codes/
 │  └─ math.py                 # Prompt templates for math tasks
 ├─ app.py                     # Streamlit dashboard for results/transcripts
 ├─ llm_utils.py               # OpenAI client builder, chat wrappers
-└─ run_interact.py            # Student–teacher interaction loop
-configs/
-└─ config.yaml                # Hydra config: paths, models, generation settings
+├─ run_interact.py            # Student–teacher interaction loop
+└─ run_sft_dpo.py             # SFT-DPO training script
+└─ configs/
+    └─ config.yaml                # Hydra config: paths, models, generation settings
 ```
 
 ---
@@ -110,7 +114,49 @@ python -m codes.data.code.sample_hard student.model="qwen7" data.data_amount=50
     experiments/<teacher>/<student>/<dataset>/
     ```
 
-4. Visualize results
+4. Run Self-Guided experiments
+    - Collect data
+        ```bash
+        python -m codes.data.rlhf
+        ```
+        This collects SFT, DPO data and dumps at 
+        ```bash
+        <data>/<teacher.model>/<dataset>/<student.model>*dagger*.jsonl
+        ```
+    - Training
+        ```bash
+        python -m codes.run_sft_dpo
+        ```
+        This runs SFT followed by DPO and saves the models at
+        ```bash
+        experiments/<teacher>/<student>/<dataset>/
+        ```
+    - Evaluation
+        Run interact using the models saved after training (for SGLang/vLLM servers point the `--lora-paths` to the trained checkpoints)
+
+5. Run Peer-Guided experiments
+    - Collect data
+        ```bash
+        python -m codes.data.rlhf_guide
+        ```
+        This collects SFT, DPO data and dumps at 
+        ```bash
+        <data>/<teacher.model>/<dataset>/<student.model>_<guide.model>*dagger*.jsonl
+        ```
+        P.S. we don't need a new script. rlhf and rlhf_guide will be merged soon
+    - Training
+        ```bash
+        python -m codes.run_sft_dpo
+        ```
+        This runs SFT followed by DPO and saves the models at
+        ```bash
+        experiments/<teacher>/<student>/<dataset>/
+        ```
+    - Evaluation
+        Run interact using the models saved after training (for SGLang/vLLM servers point the `--lora-paths` to the trained checkpoints)
+
+
+6. Visualize results
     ```bash
     streamlit run codes/app.py
     ```

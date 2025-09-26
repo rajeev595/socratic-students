@@ -194,10 +194,10 @@ def main(cfg: DictConfig) -> None:
 
     # Build teacher and student clients (names may be normalized inside)
     teacher_name, teacher_client = build_client(
-        cfg.teacher.fpath if cfg.teacher.fpath else str(cfg.teacher.model)
+        cfg.teacher.model, cfg.teacher.fpath, cfg.teacher.server
     )
     student_name, student_client = build_client(
-        cfg.student.fpath if cfg.student.fpath else str(cfg.student.model)
+        cfg.student.model, cfg.student.fpath, cfg.student.server
     )
     logger.info("Teacher=%s | Student=%s", teacher_name, student_name)
 
@@ -214,13 +214,10 @@ def main(cfg: DictConfig) -> None:
     if os.path.exists(output_fpath):
         with open(output_fpath) as f:
             data = json.load(f)
-        if isinstance(data, list):
-            # Legacy format: only a list of collected problems
-            collected = data  # type: ignore[assignment]
-        else:
-            collected = data.get("collected", [])
-            teacher_blacklist = set(data.get("teacher_blacklist", []))
-            student_ids = set(data.get("student_ids", []))
+
+        collected = data.get("collected", [])
+        teacher_blacklist = set(data.get("teacher_blacklist", []))
+        student_ids = set(data.get("student_ids", []))
         logger.info(
             "Resuming from %d problems | blacklist=%d | student_seen=%d | path=%s",
             len(collected), len(teacher_blacklist), len(student_ids), output_fpath
@@ -277,6 +274,20 @@ def main(cfg: DictConfig) -> None:
 
             total_prompt_tks += p_tks
             total_completion_tks += c_tks
+
+            # Save every 25 examples
+            if len(collected) > 0 and len(collected) % 25 == 0:
+                with open(output_fpath, "w") as f:
+                    json.dump(
+                        {
+                            "collected": collected,
+                            "teacher_blacklist": sorted(teacher_blacklist),
+                            "student_ids": sorted(student_ids),
+                        },
+                        f,
+                        indent=2,
+                    )
+                logger.info("Collected %d/%d samples!", len(collected), cfg.data.data_amount)
 
             if len(collected) >= cfg.data.data_amount:
                 # Cancel pending futures

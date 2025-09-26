@@ -227,6 +227,7 @@ def main(cfg: DictConfig) -> None:
     if os.path.exists(train_fpath_sft):
         with open(train_fpath_sft, "r") as f:
             for line in f:
+                ex = json.loads(line)
                 count_sft += 1
                 if ex["dagger_iter"] == cfg.gen.dagger_iter:
                     existing_pids.add(ex["problem"]["id"])
