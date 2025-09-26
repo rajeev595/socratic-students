@@ -6,7 +6,9 @@ Currently includes:
 """
 
 import math
-from typing import List, Dict
+import random
+import numpy as np
+from typing import List, Dict, Any
 
 
 def compute_pass_at_k(results: List[bool], k_values: List[int]) -> Dict[int, float]:
@@ -53,3 +55,63 @@ def compute_pass_at_k(results: List[bool], k_values: List[int]) -> Dict[int, flo
         scores[k] = round(float(score), 2)
 
     return scores
+
+
+def bootstrap_aggregate(
+    itemized: Dict[str, Dict[str, Any]],
+    num_samples: int = 10_000,
+    seed: int = 42
+):
+    """
+    Args:
+        itemized: mapping {example_id: {"results": {turn: {k: float}}}}
+        num_samples: number of bootstrap resamples
+        seed: RNG seed
+
+    Returns:
+        agg: {turn: {k: [mean_of_means, std_of_means]}}
+    """
+    rng = random.Random(seed)
+
+    # Collect per-turn, per-k arrays across examples
+    turns = None
+    ks = None
+    values: Dict[int, Dict[int, list]] = {}  # {turn: {k: [values]}}
+
+    for _, ex_data in itemized.items():
+        results = ex_data["results"]
+        if turns is None:
+            turns = sorted(map(int, results.keys()))
+        if ks is None:
+            # take k set from the first turn present
+            first_turn_vals = next(iter(results.values()))
+            ks = sorted(map(int, first_turn_vals.keys()))
+
+        for t_str, t_res in results.items():
+            t = int(t_str)
+            for k_str, v in t_res.items():
+                k = int(k_str)
+                values.setdefault(t, {}).setdefault(k, []).append(float(v))
+
+    if turns is None or ks is None:
+        return {}
+
+    # Bootstrap per (turn, k)
+    agg: Dict[int, Dict[int, list]] = {}
+    for t in turns:
+        agg[t] = {}
+        for k in ks:
+            arr = np.array(values.get(t, {}).get(k, []), dtype=float)
+            m = len(arr)
+            if m == 0:
+                agg[t][k] = [float("nan"), float("nan")]
+                continue
+
+            # resample with replacement from indices [0..m-1]
+            samples = []
+            for _ in range(num_samples):
+                idxs = rng.choices(range(m), k=m)
+                samples.append(float(arr[idxs].mean()))
+            agg[t][k] = [float(np.mean(samples)), float(np.std(samples, ddof=0))]
+
+    return agg
