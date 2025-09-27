@@ -27,7 +27,6 @@ from typing import Any, Dict, List, Set, Tuple, TypedDict
 
 import hydra
 from datasets import load_dataset
-from hydra.utils import to_absolute_path
 from omegaconf import DictConfig
 from openai import OpenAI
 from tqdm import tqdm
@@ -35,7 +34,8 @@ from tqdm import tqdm
 from codes.evaluation.code import evaluate_code_completion
 from codes.evaluation.code import generate_code_completions
 from codes.evaluation.utils import compute_pass_at_k
-from codes.llm_utils import build_client
+from codes.utils.llm.server import build_client
+from codes.utils.vars import set_envs
 
 # ---------------------------------------------------------------------
 # Logging
@@ -351,20 +351,16 @@ def main(cfg: DictConfig) -> None:
     - gen.pass_k                 : int
     - gen.pass_at_k_threshold    : float
     """
-    # Read API key path and export for the SDK
-    key_path = to_absolute_path(str(cfg.paths.openai_api_key_fpath))
-    with open(key_path, "r") as f:
-        openai_key = f.read().strip()
-    os.environ["OPENAI_API_KEY"] = openai_key
-
-    os.environ["CUDA_VISIBLE_DEVICES"] = ",".join([str(g) for g in cfg.train.gpus])
+    # Set OpenAI API key and HF HOME envs
+    set_envs(cfg.paths.openai_api_key_fpath, cfg.paths.hf_home)
 
     # Build teacher and student clients (names may be normalized inside)
-    teacher_name, teacher_client = build_client(
-        cfg.teacher.model, cfg.teacher.fpath, cfg.teacher.server
+    teacher_name, student_name = cfg.teacher.model, cfg.student.model
+    teacher_client = build_client(
+        model=teacher_name, gpus=cfg.teacher.gpus, server=cfg.teacher.server
     )
-    student_name, student_client = build_client(
-        cfg.student.model, cfg.student.fpath, cfg.student.server
+    student_client = build_client(
+        model=student_name, gpus=cfg.student.gpus, server=cfg.student.server
     )
     logger.info("Teacher=%s | Student=%s", teacher_name, student_name)
 
@@ -389,8 +385,6 @@ def main(cfg: DictConfig) -> None:
             "Resuming from %d problems in %s | teacher_blacklist=%d, student_processed=%d",
             len(collected), output_fpath, len(teacher_blacklist), len(student_ids)
         )
-
-    num_samples = min(cfg.gen.num_samples, max(list(cfg.gen.k_values)))         # ensure pass@k is defined
 
     # Load datasets (HE test split; OPC sample)
     datasets = []
@@ -436,7 +430,7 @@ def main(cfg: DictConfig) -> None:
                         student_name,
                         cfg.student.temperature,
                         list(cfg.gen.k_values),
-                        num_samples,
+                        cfg.gen.num_samples,
                         int(cfg.gen.pass_k),
                         float(cfg.gen.pass_at_k_threshold)
                     )
