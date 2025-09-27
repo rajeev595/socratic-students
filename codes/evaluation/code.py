@@ -36,7 +36,7 @@ from codes.data.utils import (
     remove_think_tags,
 )
 from codes.prompts.code import CODE_GENERATION_PROMPT
-from codes.llm_utils import chat_complete
+from codes.utils.llm.chat import chat_complete
 
 
 # ---------------------------
@@ -173,9 +173,11 @@ def evaluate_code_completion(
     full_code = (problem["solution"] if sanity_check else prompt + code_block) + "\n\n" + problem["test"]
 
     # Create temp file
+    tmp_dir = os.path.join(os.environ["HF_HOME"], "tmp")
+    os.makedirs(tmp_dir, exist_ok=True)
     f = tempfile.NamedTemporaryFile(
         suffix=".py", mode="w", delete=False, 
-        # dir="/playpen-hdd/ambati/temp/"
+        dir=tmp_dir
     )
     temp_file_path = f.name
     f.write(full_code)
