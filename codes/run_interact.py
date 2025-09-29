@@ -16,7 +16,9 @@ from omegaconf import DictConfig
 
 from openai import OpenAI
 
-from codes.llm_utils import set_openai_key_env, build_client, chat_complete
+from codes.utils.llm.server import build_client
+from codes.utils.llm.chat import chat_complete
+from codes.utils.vars import set_envs
 from codes.data.utils import remove_think_tags, msgs_to_string, format_messages
 from codes.prompts.utils import _select_sys_prompt, _problem_greeting
 from codes.evaluation.code import generate_code_completions, evaluate_code_completion
@@ -346,8 +348,8 @@ def main(cfg: DictConfig) -> None:
     """
     start_time = time.perf_counter()  # ---- start timer ----
 
-    # set the OpenAI key env variable
-    set_openai_key_env(cfg.paths.openai_api_key_fpath)
+    # set the OpenAI key env variable, HF HOME
+    set_envs(cfg.paths.openai_api_key_fpath, cfg.paths.hf_home)
 
     # Hydra config keys
     dataset: str = cfg.experiment.dataset
@@ -415,11 +417,12 @@ def main(cfg: DictConfig) -> None:
         logger.info(f"Total evaluation (OOD) problems: {len(evaluation_problems)}")
 
     # Build teacher and student clients (names may be normalized inside)
-    teacher_name, teacher_client = build_client(
-        cfg.teacher.model, cfg.teacher.fpath, cfg.teacher.server
+    teacher_name, student_name = cfg.teacher.model, cfg.student.model
+    teacher_client = build_client(
+        teacher_name, cfg.teacher.gpus, cfg.teacher.server
     )
-    student_name, student_client = build_client(
-        cfg.student.model, cfg.student.fpath, cfg.student.server
+    student_client = build_client(
+        student_name, cfg.student.gpus, cfg.student.server
     )
     logger.info("Teacher=%s | Student=%s", teacher_name, student_name)
 

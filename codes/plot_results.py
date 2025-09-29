@@ -18,7 +18,7 @@ import pandas as pd
 import hydra
 from omegaconf import DictConfig
 
-from codes.llm_utils import _MODEL_ALIASES  # Dict[str, Tuple[str, int | None]]
+from codes.utils.llm.server import _MODEL_ALIASES  # Dict[str, Tuple[str, int | None]]
 
 # --- Matplotlib defaults, Palettes, and Markers remain the same ---
 plt.rcParams.update({
@@ -127,7 +127,7 @@ def _collect_dataframe(root: Path, allow_experiments: Optional[List[str]] = None
 def _full_model_name(student: str) -> str:
     # ... (code is unchanged)
     if student in _MODEL_ALIASES:
-        full, _ = _MODEL_ALIASES[student]
+        full = _MODEL_ALIASES[student]
         return full
     return student
 
@@ -176,7 +176,15 @@ def plot_passk_vs_turns(
 
             for idx, (key, g) in enumerate(sub.groupby(group_cols)):
                 label = "/".join(str(x) for x in key) if isinstance(key, tuple) else str(key)
-                label = "selfguided" if "selfguided" in label else label
+                if label == "pre_assessment":
+                    label = "pre"
+                elif label == "mid_assessment":
+                    label = "mid"
+                elif label == "selfguided":
+                    label = "self"
+                elif label == "peerguided":
+                    label = "peer"
+
                 g = g.sort_values("turn")
 
                 # The key from groupby is a tuple. The experiment name is always the first element.
@@ -235,12 +243,10 @@ def plot_passk_vs_turns(
 @hydra.main(version_base=None, config_path="../configs/", config_name="config.yaml")
 def main(cfg: DictConfig) -> None:
     # Defaults if keys are missing in config
-    experiments = cfg.get("experiments", ["unguided", "cot", "pre_assessment", "mid_assessment", "selfguided_mid_assessment"])
+    experiments = cfg.get("experiments", ["cot", "mid_assessment", "pre_assessment", "unguided", "selfguided", "peerguided"])
     teachers = cfg.get("teachers", ["gpt-4o"])
-    # students = cfg.get("students", ["gemma1", "llama8", "mistral7", "qwen7"])
-    students = cfg.get("students", ["mistral7", "llama8"])
-    # datasets = cfg.get("datasets", ["gsm8k", "humaneval_opc"])
-    datasets = cfg.get("datasets", ["humaneval_opc"])
+    students = cfg.get("students", ["mistral7", "llama8", "qwen7"])
+    datasets = cfg.get("datasets", ["gsm8k", "humaneval_opc"])
 
     root = Path(cfg.paths.experiments).expanduser().resolve()
     outdir = Path(os.path.join(root, "plots")).expanduser().resolve()
