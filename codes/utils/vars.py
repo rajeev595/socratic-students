@@ -12,6 +12,11 @@ def set_hf_env(hf_home: str) -> None:
     os.environ["HF_HOME"] = hf_home
 
 
+def set_hydra_env() -> None:
+    os.environ.setdefault("HYDRA_FULL_ERROR", "1")
+
+
 def set_envs(openai_api_key_fpath, hf_home) -> None:
+    set_hydra_env()
     set_openai_key_env(openai_api_key_fpath)
     set_hf_env(hf_home)

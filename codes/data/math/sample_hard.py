@@ -333,6 +333,4 @@ def main(cfg: DictConfig) -> None:
 
 
 if __name__ == "__main__":
-    # Helpful for debugging Hydra tracebacks
-    os.environ.setdefault("HYDRA_FULL_ERROR", "1")
     main()
