@@ -32,7 +32,7 @@ import re
 from typing import List, Dict, Any, Tuple
 from openai import OpenAI
 
-from codes.llm_utils import chat_complete
+from codes.utils.llm.chat import chat_complete
 from codes.data.utils import extract_math_response
 from codes.prompts.math import MATH_GENERATION_PROMPT
 
@@ -138,7 +138,13 @@ def _extract_float(s: str) -> Tuple[bool, float]:
     return True, float(matches[-1])
 
 
-def evaluate_math_completion(model_response: str, problem: Dict[str, Any]) -> Tuple[str, bool]:
+def evaluate_math_completion(
+    model_response: str, 
+    problem: Dict[str, Any], 
+    client: OpenAI,
+    model_name: str,
+    temperature: float
+) -> Tuple[str, bool]:
     """
     Evaluate a math answer by strict numeric equality first, then by an LLM judge.
 
@@ -171,29 +177,13 @@ def evaluate_math_completion(model_response: str, problem: Dict[str, Any]) -> Tu
         "Respond with a single YES or NO (your reply must start with YES or NO)."
     )
     messages = [{"role": "user", "content": prompt}]
-
-    client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
-    response = client.responses.create(
-        model="gpt-5-nano",
-        input=messages,
-        reasoning={"effort": "minimal"},
-        text={"verbosity": "low"},
+    reply, _, _ = chat_complete(
+        client=client,
+        model_name=model_name,
+        messages=messages,
+        n=1,
+        temperature=temperature,
+        max_tokens=16
     )
-    out = ""
-    for item in response.output:
-        if hasattr(item, "content"):
-            if item.content:
-                for c in item.content:
-                    if hasattr(c, "text"):
-                        out += c.text
 
-    gpt_reply = out.strip().lower()
-
-    # response = client.chat.completions.create(
-    #     model="gpt-4o-mini",
-    #     messages=messages,
-    #     temperature=0.0,
-    #     max_tokens=16,
-    # )    
-    # gpt_reply = (response.choices[0].message.content or "").strip().lower()
-    return model_response, gpt_reply.startswith("yes")
+    return model_response, reply[0].startswith("yes")
