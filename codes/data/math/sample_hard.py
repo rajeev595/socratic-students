@@ -22,14 +22,16 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import hydra
 from datasets import load_dataset
-from hydra.utils import to_absolute_path
 from omegaconf import DictConfig
 from openai import OpenAI
 from tqdm import tqdm
 
 from codes.evaluation.math import generate_math_completions, evaluate_math_completion
 from codes.evaluation.utils import compute_pass_at_k
-from codes.llm_utils import build_client
+from codes.utils.llm.server import build_client
+from codes.utils.vars import set_envs
+from codes.data.code.sample_hard import count_examples, save_train_test_split
+from codes.utils.file_ops import save_json_atomic, load_json_resilient
 
 
 # ---------------------------------------------------------------------
@@ -48,7 +50,6 @@ logging.basicConfig(
 # ---------------------------------------------------------------------
 GOOD_PROBLEM = 1
 TEACHER_BLACKLIST = 2
-STUDENT_BLACKLIST = 3
 
 
 # ---------------------------------------------------------------------
@@ -81,9 +82,13 @@ def organize_gsm_row(row: Dict[str, Any]) -> MathProblem:
         {"id": int, "prompt": str, "solution": str}
     """
     # Original logic: id like "123-0" and assert alt==0
-    pid_str, alt_str = row["id"].split("-")
-    pid, alt = int(pid_str), int(alt_str)
-    assert alt == 0
+    if "-" in row["id"]:
+        pid_str, alt_str = row["id"].split("-")
+        pid, alt = int(pid_str), int(alt_str)
+        assert alt == 0
+    else:
+        pid = int(row["id"])
+
     return {"id": pid, "prompt": row["question"], "solution": row["answer"]}
 
 
@@ -107,8 +112,7 @@ def process_problem(
     student_name: str,
     student_temperature: float,
     k_values: List[int],
-    num_samples: int,
-    pass_at_k_threshold: float
+    num_samples: int
 ):
     pid = int(problem["id"])
 
@@ -129,15 +133,16 @@ def process_problem(
     # Evaluate student results
     results: List[bool] = []
     for comp in completions:
-        _, ok = evaluate_math_completion(comp, problem)
+        _, ok = evaluate_math_completion(
+            model_response=comp,
+            problem=problem,
+            client=teacher_client,
+            model_name=teacher_name,
+            temperature=0.0
+        )
         results.append(ok)
 
     scores = compute_pass_at_k(results, k_values)
-
-    # Require the student to struggle (e.g., pass@1 < threshold)
-    if scores.get(1, 0.0) >= float(pass_at_k_threshold):
-        logger.debug("Student solved pid=%d (pass@1=%.3f) >= threshold=%.3f", pid, scores.get(1, 0.0), pass_at_k_threshold)
-        return STUDENT_BLACKLIST, p, c
 
     # -------------------------
     # 2) Probe teacher model
@@ -153,12 +158,19 @@ def process_problem(
         is_ood=False,
     )
 
-    _, teacher_pass = evaluate_math_completion(t_comps[0] if t_comps else "", problem)
+    _, teacher_pass = evaluate_math_completion(
+        model_response=t_comps[0] if t_comps else "",
+        problem=problem,
+        client=teacher_client,
+        model_name=teacher_name,
+        temperature=0.0
+    )
+
     if not teacher_pass:
         logger.debug("Teacher failed pid=%d; added to blacklist", pid)
-        return TEACHER_BLACKLIST, p + tp, c + tc
+        return TEACHER_BLACKLIST, {}, p + tp, c + tc
 
-    return GOOD_PROBLEM, p + tp, c + tc
+    return GOOD_PROBLEM, scores, p + tp, c + tc
 
 
 # =========================
@@ -186,18 +198,16 @@ def main(cfg: DictConfig) -> None:
     """
     start_time = time.perf_counter()  # ---- start timer ----
 
-    # Read API key and export for the OpenAI SDK
-    key_path = to_absolute_path(str(cfg.paths.openai_api_key_fpath))
-    with open(key_path, "r") as f:
-        openai_key = f.read().strip()
-    os.environ["OPENAI_API_KEY"] = openai_key
+    # Set OpenAI API key and HF HOME envs
+    set_envs(cfg.paths.openai_api_key_fpath, cfg.paths.hf_home)
 
     # Build teacher and student clients (names may be normalized inside)
-    teacher_name, teacher_client = build_client(
-        cfg.teacher.model, cfg.teacher.fpath, cfg.teacher.server
+    teacher_name, student_name = cfg.teacher.model, cfg.student.model
+    teacher_client = build_client(
+        model=teacher_name, gpus=cfg.teacher.gpus, server=cfg.teacher.server
     )
-    student_name, student_client = build_client(
-        cfg.student.model, cfg.student.fpath, cfg.student.server
+    student_client = build_client(
+        model=student_name, gpus=cfg.student.gpus, server=cfg.student.server
     )
     logger.info("Teacher=%s | Student=%s", teacher_name, student_name)
 
@@ -212,8 +222,7 @@ def main(cfg: DictConfig) -> None:
 
     # Resume from prior run if file exists (supports legacy list-only format)
     if os.path.exists(output_fpath):
-        with open(output_fpath) as f:
-            data = json.load(f)
+        data = load_json_resilient(output_fpath)
 
         collected = data.get("collected", [])
         teacher_blacklist = set(data.get("teacher_blacklist", []))
@@ -224,7 +233,9 @@ def main(cfg: DictConfig) -> None:
         )
 
     # Dataset (GSM-like). Adjust split/name as needed.
-    gsm_ds = load_dataset("flagopen/gsm8kplus", split="train")
+    gsm_ds = load_dataset("openai/gsm8k", "main", split="train")
+    if "id" not in gsm_ds.column_names:
+        gsm_ds = gsm_ds.add_column("id", [str(i) for i in range(len(gsm_ds))])
 
     total_prompt_tks = 0
     total_completion_tks = 0
@@ -253,20 +264,16 @@ def main(cfg: DictConfig) -> None:
                     student_name,
                     float(cfg.student.temperature),
                     list(cfg.gen.k_values),
-                    int(cfg.gen.num_samples),
-                    float(cfg.gen.pass_at_k_threshold)
+                    int(cfg.gen.num_samples)
                 )
             ] = problem
 
         for future in tqdm(as_completed(future_to_pid), total=len(future_to_pid), desc="Curating"):
-            result, p_tks, c_tks = future.result()
+            result, scores, p_tks, c_tks = future.result()
             problem = future_to_pid[future]
 
             if result == GOOD_PROBLEM:
-                collected.append(problem)
-                student_ids.add(problem["id"])
-
-            elif result == STUDENT_BLACKLIST:
+                collected.append({"problem": problem, "scores": scores})
                 student_ids.add(problem["id"])
 
             elif result == TEACHER_BLACKLIST:
@@ -275,43 +282,54 @@ def main(cfg: DictConfig) -> None:
             total_prompt_tks += p_tks
             total_completion_tks += c_tks
 
-            # Save every 25 examples
-            if len(collected) > 0 and len(collected) % 25 == 0:
-                with open(output_fpath, "w") as f:
-                    json.dump(
-                        {
-                            "collected": collected,
-                            "teacher_blacklist": sorted(teacher_blacklist),
-                            "student_ids": sorted(student_ids),
-                        },
-                        f,
-                        indent=2,
-                    )
+            # Save every 100 examples
+            if len(collected) > 0 and len(collected) % 100 == 0:
+                save_json_atomic(
+                    output_fpath, 
+                    {
+                        "collected": collected,
+                        "teacher_blacklist": list(teacher_blacklist),
+                        "student_ids": list(student_ids)
+                    },
+                    indent=2
+                )
                 logger.info("Collected %d/%d samples!", len(collected), cfg.data.data_amount)
 
             if len(collected) >= cfg.data.data_amount:
                 # Cancel pending futures
                 for fut in future_to_pid:
                     fut.cancel()
+                executor.shutdown(cancel_futures=True)
                 break
 
     # Final save
-    with open(output_fpath, "w") as f:
-        json.dump(
-            {
-                "collected": collected,
-                "teacher_blacklist": sorted(teacher_blacklist),
-                "student_ids": sorted(student_ids),
-            },
-            f,
-            indent=2,
-        )
+    save_json_atomic(
+        output_fpath, 
+        {
+            "collected": collected,
+            "teacher_blacklist": list(teacher_blacklist),
+            "student_ids": list(student_ids)
+        },
+        indent=2
+    )
 
     logger.info("Saved %d problems to %s", len(collected), output_fpath)
     logger.info("Token usage (approx): prompt=%d, completion=%d", total_prompt_tks, total_completion_tks)
 
     elapsed = time.perf_counter() - start_time
     logger.info("Total time elapsed: %s", timedelta(seconds=int(elapsed)))
+
+    # Train-test split
+    save_train_test_split(
+        data=collected,
+        dir=teacher_dir,
+        name=student_name,
+        pass_k=cfg.gen.pass_k,
+        pass_at_k_threshold=cfg.gen.pass_at_k_threshold
+    )
+
+    # Count the no. of examples
+    count_examples(collected)
 
 
 if __name__ == "__main__":
