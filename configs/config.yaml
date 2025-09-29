@@ -1,8 +1,8 @@
 paths:
   openai_api_key_fpath: /home/ambati/.openai_api_key.zshrc      # path to OpenAI API key
-  data: /playpen-ssd2/ambati/interact_plus/data/                # path to data
-  experiments: /playpen-ssd2/ambati/interact_plus/experiments/  # path to save experiment results
-  hf_home: /playpen-ssd2/pretrained_models/                     # Hugging Face cache dir
+  data: /playpen-hdd/ambati/interact_plus/data/                 # path to data
+  experiments: /playpen-hdd/ambati/interact_plus/experiments/   # path to save experiment results
+  hf_home: /playpen-hdd/shared/pretrained_models/               # Hugging Face cache dir
 
 # Model
 teacher:
@@ -25,7 +25,7 @@ guide:
 
 # Data & paths
 data:
-  type: code                    # code or math
+  type: math                    # code or math
   filename: qwen7
   data_amount: 10000000
 
@@ -37,12 +37,12 @@ gen:
   pass_at_k_threshold: 0.4
   eps: 0.2                      # epsilon-greedy exploration
   retry_on_fail: 5
-  take_every: 3                 # only used for math dataset
+  take_every: 1                 # only used for math dataset
   dagger_iter: 0                # DAgger iteration
 
 # Direct Preference Optimization (DPO) settings
 train:
-  split: 0.8
+  size: 0.7
   sft_use_4bit: False
   rlhf_use_4bit: True
   lora_r: 16
@@ -63,7 +63,7 @@ experiment:
   name: data_collection
   cot: False
   ood: False
-  dataset: humaneval_opc        # code - humaneval_opc/mbpp, math - gsm8k
+  dataset: gsm8k        # code - humaneval_opc/mbpp, math - gsm8k
   assessment_turn: -1           # -1 (none), 1 (pre), 5 (mid)
   start_from_turn: 1            # 1 (new), odd (student), even (teacher)
   total_turns: 11

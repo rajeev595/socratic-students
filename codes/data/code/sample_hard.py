@@ -344,6 +344,7 @@ def count_examples(data):
 
 def save_train_test_split(
     data,
+    size: float,
     dir: str,
     name: str,
     pass_k: int,
@@ -363,24 +364,25 @@ def save_train_test_split(
     # Shuffle before split to train-test
     shuffle(hard)
     total_num = len(hard)
+    num_train = int(size * total_num)
 
     # Save train examples
     train_fpath = os.path.join(dir, f"{name}_train.json")
     save_json_atomic(
         path=train_fpath,
-        obj=hard[: total_num // 2],
+        obj=hard[: num_train],
         indent=2
     )
-    logger.info("Train-split: %d problems at %s", total_num // 2, train_fpath)
+    logger.info("Train-split: %d problems at %s", num_train, train_fpath)
 
     # Save test examples
     test_fpath = os.path.join(dir, f"{name}_test.json")
     save_json_atomic(
         path=test_fpath,
-        obj=hard[total_num // 2: ],
+        obj=hard[num_train: ],
         indent=2
     )
-    logger.info("Train-split: %d problems at %s", total_num - total_num // 2, test_fpath)
+    logger.info("Train-split: %d problems at %s", total_num - num_train, test_fpath)
 
 
 # ---------------------------------------------------------------------
@@ -538,6 +540,7 @@ def main(cfg: DictConfig) -> None:
     # Train-test split
     save_train_test_split(
         data=collected,
+        size=cfg.train.size,
         dir=teacher_dir,
         name=student_name,
         pass_k=cfg.gen.pass_k,

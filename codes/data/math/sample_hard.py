@@ -322,6 +322,7 @@ def main(cfg: DictConfig) -> None:
     # Train-test split
     save_train_test_split(
         data=collected,
+        size=cfg.train.size,
         dir=teacher_dir,
         name=student_name,
         pass_k=cfg.gen.pass_k,
