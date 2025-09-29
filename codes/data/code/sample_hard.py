@@ -36,6 +36,7 @@ from codes.evaluation.code import generate_code_completions
 from codes.evaluation.utils import compute_pass_at_k
 from codes.utils.llm.server import build_client
 from codes.utils.vars import set_envs
+from codes.utils.file_ops import save_json_atomic, load_json_resilient
 
 # ---------------------------------------------------------------------
 # Logging
@@ -53,7 +54,6 @@ logging.basicConfig(
 # ---------------------------------------------------------------------
 GOOD_PROBLEM = 1
 TEACHER_BLACKLIST = 2
-STUDENT_BLACKLIST = 3
 
 
 # ---------------------------------------------------------------------
@@ -254,9 +254,7 @@ def process_problem(
     student_name: str,
     student_temperature: float,
     k_values: List[int],
-    num_samples: int,
-    pass_k: int,
-    pass_at_k_threshold: float
+    num_samples: int
 ):
     timeout_sec = int(os.getenv("EVAL_TIMEOUT_SEC", "12"))              # bump default from 3s → 12s
 
@@ -268,7 +266,7 @@ def process_problem(
     if not gt_ok:
         # If tests/solution are broken, blacklist and skip
         logger.debug("Sanity check failed; blacklisting pid=%d", pid)
-        return TEACHER_BLACKLIST, 0, 0
+        return TEACHER_BLACKLIST, {}, 0, 0
 
     # 2) Probe student model with N completions and compute pass@k
     completions, p_tks, c_tks = generate_code_completions(
@@ -300,11 +298,6 @@ def process_problem(
 
     scores = compute_pass_at_k(results, k_values)
 
-    # If student already reaches threshold at pass_k, we do NOT keep it
-    if scores[pass_k] >= pass_at_k_threshold:
-        logger.debug("Student passes threshold for pid=%d (pass@%d=%.3f)", pid, pass_k, scores[pass_k])
-        return STUDENT_BLACKLIST, p_tks, c_tks
-
     # 3) Probe teacher once; keep only if it passes tests
     t_texts, tp, tc = generate_code_completions(
         previous_conversation_str="",
@@ -323,9 +316,71 @@ def process_problem(
         logger.warning("[teacher eval pid=%d] %s", pid, info["error"])
     if not teacher_pass:
         logger.debug("Teacher failed pid=%d; added to blacklist", pid)
-        return TEACHER_BLACKLIST, p_tks + tp, c_tks + tc
+        return TEACHER_BLACKLIST, {}, p_tks + tp, c_tks + tc
 
-    return GOOD_PROBLEM, p_tks + tp, c_tks + tc
+    return GOOD_PROBLEM, scores, p_tks + tp, c_tks + tc
+
+
+def count_examples(data):
+    thresholds = [0.1, 0.2, 0.3, 0.4, 0.5]
+    ks = ["1", "5", "10"]
+
+    # Initialize counters
+    counts = {k: {th: 0 for th in thresholds} for k in ks}
+
+    for ex in data:
+        for k in ks:
+            score = ex["scores"][k]
+            for th in thresholds:
+                if score < th:
+                    counts[k][th] += 1
+
+    # Pretty print
+    for k in ks:
+        logger.info(f"\nPass@{k}:")
+        for th in thresholds:
+            logger.info(f"  < {th}: {counts[k][th]}")
+
+
+def save_train_test_split(
+    data,
+    dir: str,
+    name: str,
+    pass_k: int,
+    pass_at_k_threshold: float
+):
+    # Sample examples with pass_at_k_threshold
+    hard = []
+    for d in data:
+        try:
+            s = d["scores"][str(pass_k)]
+        except:
+            s = d["scores"][int(pass_k)]
+        
+        if s < pass_at_k_threshold:
+            hard.append(d["problem"])
+
+    # Shuffle before split to train-test
+    shuffle(hard)
+    total_num = len(hard)
+
+    # Save train examples
+    train_fpath = os.path.join(dir, f"{name}_train.json")
+    save_json_atomic(
+        path=train_fpath,
+        obj=hard[: total_num // 2],
+        indent=2
+    )
+    logger.info("Train-split: %d problems at %s", total_num // 2, train_fpath)
+
+    # Save test examples
+    test_fpath = os.path.join(dir, f"{name}_test.json")
+    save_json_atomic(
+        path=test_fpath,
+        obj=hard[total_num // 2: ],
+        indent=2
+    )
+    logger.info("Train-split: %d problems at %s", total_num - total_num // 2, test_fpath)
 
 
 # ---------------------------------------------------------------------
@@ -375,8 +430,7 @@ def main(cfg: DictConfig) -> None:
     student_ids: Set[int] = set()
 
     if os.path.exists(output_fpath):
-        with open(output_fpath) as f:
-            data = json.load(f)
+        data = load_json_resilient(output_fpath)
 
         collected = data.get("collected", [])
         teacher_blacklist = set(data.get("teacher_blacklist", []))
@@ -430,21 +484,16 @@ def main(cfg: DictConfig) -> None:
                         student_name,
                         cfg.student.temperature,
                         list(cfg.gen.k_values),
-                        cfg.gen.num_samples,
-                        int(cfg.gen.pass_k),
-                        float(cfg.gen.pass_at_k_threshold)
+                        cfg.gen.num_samples
                     )
                 ] = problem
 
         for future in tqdm(as_completed(future_to_pid), total=len(future_to_pid), desc="Curating"):
-            result, p_tks, c_tks = future.result()
+            result, scores, p_tks, c_tks = future.result()
             problem = future_to_pid[future]
 
             if result == GOOD_PROBLEM:
-                collected.append(problem)
-                student_ids.add(problem["id"])
-
-            elif result == STUDENT_BLACKLIST:
+                collected.append({"problem": problem, "scores": scores})
                 student_ids.add(problem["id"])
 
             elif result == TEACHER_BLACKLIST:
@@ -453,18 +502,17 @@ def main(cfg: DictConfig) -> None:
             total_prompt_tks += p_tks
             total_completion_tks += c_tks
 
-            # Save every 25 examples
-            if len(collected) > 0 and len(collected) % 25 == 0:
-                with open(output_fpath, "w") as f:
-                    json.dump(
-                        {
-                            "collected": collected,
-                            "teacher_blacklist": sorted(teacher_blacklist),
-                            "student_ids": sorted(student_ids),
-                        },
-                        f,
-                        indent=2,
-                    )
+            # Save every 100 examples
+            if len(collected) > 0 and len(collected) % 100 == 0:
+                save_json_atomic(
+                    output_fpath, 
+                    {
+                        "collected": collected,
+                        "teacher_blacklist": list(teacher_blacklist),
+                        "student_ids": list(student_ids)
+                    },
+                    indent=2
+                )
                 logger.info("Collected %d/%d samples!", len(collected), cfg.data.data_amount)
 
             if len(collected) >= cfg.data.data_amount:
@@ -474,41 +522,30 @@ def main(cfg: DictConfig) -> None:
                 break
 
     # Final save
-    with open(output_fpath, "w") as f:
-        json.dump(
-            {
-                "collected": collected,
-                "teacher_blacklist": sorted(teacher_blacklist),
-                "student_ids": sorted(student_ids),
-            },
-            f,
-            indent=2,
-        )
+    save_json_atomic(
+        output_fpath, 
+        {
+            "collected": collected,
+            "teacher_blacklist": list(teacher_blacklist),
+            "student_ids": list(student_ids)
+        },
+        indent=2
+    )
 
     logger.info("Saved %d problems to %s", len(collected), output_fpath)
     logger.info("Token usage (approx): prompt=%d, completion=%d", total_prompt_tks, total_completion_tks)
 
-    # Train-Test split
-    shuffle(collected)
-    total_num = len(collected)
+    # Train-test split
+    save_train_test_split(
+        data=collected,
+        dir=teacher_dir,
+        name=student_name,
+        pass_k=cfg.gen.pass_k,
+        pass_at_k_threshold=cfg.gen.pass_at_k_threshold
+    )
 
-    train_fpath = os.path.join(teacher_dir, f"{cfg.student.model}_train.json")
-    with open(train_fpath, "w") as f:
-        json.dump(
-            collected[: total_num // 2],
-            f,
-            indent=2,
-        )
-    logger.info("Train-split: %d problems at %s", total_num // 2, train_fpath)
-
-    test_fpath = os.path.join(teacher_dir, f"{cfg.student.model}_test.json")
-    with open(test_fpath, "w") as f:
-        json.dump(
-            collected[total_num // 2: ],
-            f,
-            indent=2,
-        )
-    logger.info("Train-split: %d problems at %s", total_num - total_num // 2, test_fpath)
+    # Count the no. of examples
+    count_examples(collected)
 
 
 if __name__ == "__main__":
