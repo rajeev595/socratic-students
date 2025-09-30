@@ -330,16 +330,20 @@ def count_examples(data):
 
     for ex in data:
         for k in ks:
-            score = ex["scores"][k]
+            try:
+                score = ex["scores"][k]
+            except:
+                score = ex["scores"][int(k)]
+
             for th in thresholds:
                 if score < th:
                     counts[k][th] += 1
 
     # Pretty print
     for k in ks:
-        logger.info(f"\nPass@{k}:")
+        logger.info(f"Pass@{k}:")
         for th in thresholds:
-            logger.info(f"  < {th}: {counts[k][th]}")
+            logger.info(f"  < {th}: {counts[k][th]}\n" if th == thresholds[-1] else f"  < {th}: {counts[k][th]}")
 
 
 def save_train_test_split(
@@ -537,6 +541,9 @@ def main(cfg: DictConfig) -> None:
     logger.info("Saved %d problems to %s", len(collected), output_fpath)
     logger.info("Token usage (approx): prompt=%d, completion=%d", total_prompt_tks, total_completion_tks)
 
+    # Count the no. of examples
+    count_examples(collected)
+
     # Train-test split
     save_train_test_split(
         data=collected,
@@ -546,9 +553,6 @@ def main(cfg: DictConfig) -> None:
         pass_k=cfg.gen.pass_k,
         pass_at_k_threshold=cfg.gen.pass_at_k_threshold
     )
-
-    # Count the no. of examples
-    count_examples(collected)
 
 
 if __name__ == "__main__":

@@ -319,6 +319,9 @@ def main(cfg: DictConfig) -> None:
     elapsed = time.perf_counter() - start_time
     logger.info("Total time elapsed: %s", timedelta(seconds=int(elapsed)))
 
+    # Count the no. of examples
+    count_examples(collected)
+
     # Train-test split
     save_train_test_split(
         data=collected,
@@ -328,9 +331,6 @@ def main(cfg: DictConfig) -> None:
         pass_k=cfg.gen.pass_k,
         pass_at_k_threshold=cfg.gen.pass_at_k_threshold
     )
-
-    # Count the no. of examples
-    count_examples(collected)
 
 
 if __name__ == "__main__":
