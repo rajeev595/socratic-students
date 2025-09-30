@@ -316,9 +316,6 @@ def main(cfg: DictConfig) -> None:
     logger.info("Saved %d problems to %s", len(collected), output_fpath)
     logger.info("Token usage (approx): prompt=%d, completion=%d", total_prompt_tks, total_completion_tks)
 
-    elapsed = time.perf_counter() - start_time
-    logger.info("Total time elapsed: %s", timedelta(seconds=int(elapsed)))
-
     # Count the no. of examples
     count_examples(collected)
 
@@ -331,6 +328,9 @@ def main(cfg: DictConfig) -> None:
         pass_k=cfg.gen.pass_k,
         pass_at_k_threshold=cfg.gen.pass_at_k_threshold
     )
+
+    elapsed = time.perf_counter() - start_time
+    logger.info("Total time elapsed: %s", timedelta(seconds=int(elapsed)))
 
 
 if __name__ == "__main__":

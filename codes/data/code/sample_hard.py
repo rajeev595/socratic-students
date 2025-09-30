@@ -18,10 +18,11 @@ Notes
 from __future__ import annotations
 
 import os
-import json
+import time
 import logging
 import subprocess
 from random import shuffle
+from datetime import timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Set, Tuple, TypedDict
 
@@ -412,6 +413,8 @@ def main(cfg: DictConfig) -> None:
     - gen.pass_k                 : int
     - gen.pass_at_k_threshold    : float
     """
+    start_time = time.perf_counter()  # ---- start timer ----
+
     # Set OpenAI API key and HF HOME envs
     set_envs(cfg.paths.openai_api_key_fpath, cfg.paths.hf_home)
 
@@ -553,6 +556,9 @@ def main(cfg: DictConfig) -> None:
         pass_k=cfg.gen.pass_k,
         pass_at_k_threshold=cfg.gen.pass_at_k_threshold
     )
+
+    elapsed = time.perf_counter() - start_time
+    logger.info("Total time elapsed: %s", timedelta(seconds=int(elapsed)))
 
 
 if __name__ == "__main__":
