@@ -123,9 +123,12 @@ def interact(
 def evaluate(
     prev_convo: str,
     data_type: str,
-    client: OpenAI,
-    model_name: str,
-    temperature: float,
+    student_client: OpenAI,
+    student_name: str,
+    student_temperature: float,
+    teacher_client: OpenAI,
+    teacher_name: str,
+    teacher_temperature: float,
     problem: Dict[str, Any],
     k_values: List[int],
     num_samples: int,
@@ -134,11 +137,11 @@ def evaluate(
     if data_type == "code":
         completions, p_tks, c_tks = generate_code_completions(
             previous_conversation_str=prev_convo,
-            client=client,
-            model_name=model_name,
+            client=student_client,
+            model_name=student_name,
             problem_dict=problem,
             num_samples=num_samples,
-            temperature=temperature,
+            temperature=student_temperature,
             max_tokens=2048,
             show_gt=False,
         )
@@ -146,16 +149,16 @@ def evaluate(
     else:
         completions, p_tks, c_tks = generate_math_completions(
             previous_conversation_str=prev_convo,
-            client=client,
-            model_name=model_name,
+            client=student_client,
+            model_name=student_name,
             problem=problem,
             num_samples=num_samples,
-            temperature=temperature,
+            temperature=student_temperature,
             max_tokens=512,
             show_gt=False,
             is_ood=is_ood,
         )
-        eval_func = evaluate_math_completion
+        eval_func = lambda x, y : evaluate_math_completion(x, y, teacher_client, teacher_name, teacher_temperature)
 
     # Evaluate completions in parallel
     flags: List[bool] = []
@@ -261,15 +264,18 @@ def run_problem(
             prev_convo = msgs_to_string(texts[: turn])
 
             pass_at_k_scores_turn, generations_turn, p_tks, c_tks = evaluate(
-                prev_convo,
-                data_type,
-                student_client,
-                student_name,
-                0.3,
-                evaluation_problem,
-                k_values,
-                num_samples,
-                is_ood
+                prev_convo=prev_convo,
+                data_type=data_type,
+                student_client=student_client,
+                student_name=student_name,
+                student_temperature=0.3,
+                teacher_client=teacher_client,
+                teacher_name=teacher_name,
+                teacher_temperature=teacher_temperature,
+                problem=evaluation_problem,
+                k_values=k_values,
+                num_samples=num_samples,
+                is_ood=is_ood,
             )
 
             pass_at_k_scores[turn] = pass_at_k_scores_turn
@@ -392,7 +398,7 @@ def main(cfg: DictConfig) -> None:
         str(cfg.paths.data),
         str(cfg.teacher.model),
         dataset,
-        f"{cfg.data.filename}_test.json",
+        f"{cfg.student.model}_test.json",
     )
     logger.info(f"Loading interaction problems: {problems_fpath}")
     with open(problems_fpath, "r") as f:
@@ -407,7 +413,7 @@ def main(cfg: DictConfig) -> None:
             str(cfg.paths.data),
             str(cfg.teacher.model),
             dataset,
-            f"{cfg.data.filename}_ood_test.json",
+            f"{cfg.student.model}_ood_test.json",
         )
 
         logger.info(f"Loading evaluation (OOD) problems: {ood_problems_path}")
@@ -422,7 +428,7 @@ def main(cfg: DictConfig) -> None:
         teacher_name, cfg.teacher.gpus, cfg.teacher.server
     )
     student_client = build_client(
-        student_name, cfg.student.gpus, cfg.student.server
+        student_name, cfg.student.gpus, cfg.student.server, lora_paths=cfg.student.lora
     )
     logger.info("Teacher=%s | Student=%s", teacher_name, student_name)
 
@@ -504,5 +510,4 @@ def main(cfg: DictConfig) -> None:
 
 
 if __name__ == "__main__":
-    os.environ["HYDRA_FULL_ERROR"] = "1"  # for debugging
     main()
