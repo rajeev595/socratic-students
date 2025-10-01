@@ -1,6 +1,8 @@
 import os
+import time
 import logging
-from typing import List, Optional
+from typing import Optional
+from datetime import timedelta
 
 import hydra
 from omegaconf import DictConfig
@@ -9,6 +11,10 @@ import torch
 from datasets import load_dataset
 from transformers import AutoTokenizer, AutoModelForCausalLM, GenerationConfig
 from transformers.trainer_utils import get_last_checkpoint
+
+from codes.utils.vars import set_envs
+from codes.utils.llm.server import _MODEL_ALIASES
+
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -49,7 +55,6 @@ def preprocess_sft_example(
 # -----------------------------
 def setup_for_training(
     tokenizer: AutoTokenizer,
-    base_model_fpath: str,
     use_4bit: bool,
     lora_r: int,
     lora_alpha: int,
@@ -83,11 +88,12 @@ def setup_for_training(
     # Load ON THE SAME DEVICE as this process will train on for 4-bit;
     # for full precision, let TRL/Accelerate place the model later.
     model = AutoModelForCausalLM.from_pretrained(
-        base_model_fpath,
+        tokenizer.name_or_path,
         quantization_config=bnb,
         device_map=({"": local_rank} if use_4bit else None),
         low_cpu_mem_usage=False,
         torch_dtype=(torch.bfloat16 if use_4bit else None),
+        cache_dir=os.path.join(os.environ["HF_HOME"], "hub")
     )
 
     # Align token IDs
@@ -149,8 +155,8 @@ def setup_for_training(
 # -----------------------------
 def train_sft(
     tokenizer: AutoTokenizer,
-    data_fpath: str,
-    base_model_fpath: str,
+    train_fpath: str,
+    val_fpath: str,
     out_dir: str,
     use_4bit: bool,
     lora_r: int,
@@ -164,7 +170,6 @@ def train_sft(
     # Enable GC for SFT (usually stable and saves memory)
     model, tokenizer, peft_cfg = setup_for_training(
         tokenizer,
-        base_model_fpath,
         use_4bit,
         lora_r,
         lora_alpha,
@@ -174,10 +179,10 @@ def train_sft(
 
     from trl import SFTTrainer, SFTConfig
 
-    ds = load_dataset("json", data_files=data_fpath)["train"]
-    ds = ds.map(lambda x: preprocess_sft_example(x, tokenizer=tokenizer))
-    split = ds.train_test_split(test_size=0.2, seed=2025)
-    train_ds, val_ds = split["train"], split["test"]
+    ds = load_dataset("json", data_files=train_fpath)["train"]
+    train_ds = ds.map(lambda x: preprocess_sft_example(x, tokenizer=tokenizer))
+    ds = load_dataset("json", data_files=val_fpath)["train"]
+    val_ds = ds.map(lambda x: preprocess_sft_example(x, tokenizer=tokenizer))
 
     sft_cfg = SFTConfig(
         output_dir=out_dir,
@@ -229,8 +234,8 @@ def train_sft(
 # -----------------------------
 def train_dpo(
     tokenizer: AutoTokenizer,
-    data_fpath: str,
-    base_model_fpath: str,
+    train_fpath: str,
+    val_fpath: str,
     init_adapter_dir: Optional[str],   # pass your SFT adapter dir here to start from SFT
     out_dir: str,
     use_4bit: bool,
@@ -246,7 +251,6 @@ def train_dpo(
     # IMPORTANT: Disable GC for DPO to avoid re-entrant backward on LoRA params
     model, tokenizer, peft_cfg = setup_for_training(
         tokenizer,
-        base_model_fpath,
         use_4bit,
         lora_r,
         lora_alpha,
@@ -261,16 +265,21 @@ def train_dpo(
     )
     if use_existing_adapter:
         logger.info(f"Loading PEFT adapter from {init_adapter_dir}")
-        model = PeftModel.from_pretrained(model, init_adapter_dir, is_trainable=True)
+        model = PeftModel.from_pretrained(
+            model, 
+            init_adapter_dir, 
+            is_trainable=True, 
+            cache_dir=os.path.join(os.environ["HF_HOME"], "hub")
+        )
         peft_cfg = None  # do NOT pass peft_config to trainer; model is already wrapped
 
     from trl import DPOTrainer, DPOConfig
 
     # ---- Data ----
-    ds = load_dataset("json", data_files=data_fpath)["train"]
-    ds = ds.map(lambda x: preprocess_rlhf_example(x, tokenizer=tokenizer))
-    split = ds.train_test_split(test_size=0.2, seed=2025)
-    train_ds, val_ds = split["train"], split["test"]
+    ds = load_dataset("json", data_files=train_fpath)["train"]
+    train_ds = ds.map(lambda x: preprocess_rlhf_example(x, tokenizer=tokenizer))
+    ds = load_dataset("json", data_files=val_fpath)["train"]
+    val_ds = ds.map(lambda x: preprocess_rlhf_example(x, tokenizer=tokenizer))
 
     # ---- DPO config ----
     dpo_cfg = DPOConfig(
@@ -334,8 +343,20 @@ def _free_cuda(*objs):
 # -----------------------------
 @hydra.main(version_base=None, config_path="../configs", config_name="config.yaml")
 def main(cfg: DictConfig) -> None:
+    start_time = time.perf_counter()  # ---- start timer ----
+
+    # set the OpenAI key env variable, HF HOME
+    set_envs(cfg.paths.openai_api_key_fpath, cfg.paths.hf_home)
+
+    # model names
+    student_name = _MODEL_ALIASES[cfg.student.model]
+
     # Tokenizer must match the student’s chat template
-    tokenizer = AutoTokenizer.from_pretrained(cfg.train.model_fpath, use_fast=True)
+    tokenizer = AutoTokenizer.from_pretrained(
+        student_name, 
+        use_fast=True, 
+        cache_dir=os.path.join(os.environ["HF_HOME"], "hub")
+    )
     if tokenizer.pad_token is None and tokenizer.eos_token is not None:
         tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "right"
@@ -346,18 +367,26 @@ def main(cfg: DictConfig) -> None:
         str(cfg.paths.data),
         str(cfg.teacher.model),
         str(cfg.experiment.dataset),
-        f"{cfg.student.model}_on_{cfg.data.filename}_cot_sft_dagger.jsonl"
-        if cfg.experiment.cot
-        else f"{cfg.student.model}_on_{cfg.data.filename}_sft_dagger.jsonl"
+        f"{cfg.student.model}_cot_sft_iter{cfg.gen.dagger_iter}_train.jsonl" if cfg.experiment.cot else f"{cfg.student.model}_sft_iter{cfg.gen.dagger_iter}_train.jsonl"
+    )
+    val_fpath_sft = os.path.join(
+        str(cfg.paths.data),
+        str(cfg.teacher.model),
+        str(cfg.experiment.dataset),
+        f"{cfg.student.model}_cot_sft_iter{cfg.gen.dagger_iter}_val.jsonl" if cfg.experiment.cot else f"{cfg.student.model}_sft_iter{cfg.gen.dagger_iter}_val.jsonl"
     )
 
     train_fpath_dpo = os.path.join(
         str(cfg.paths.data),
         str(cfg.teacher.model),
         str(cfg.experiment.dataset),
-        f"{cfg.student.model}_on_{cfg.data.filename}_cot_rlhf_dagger.jsonl"
-        if cfg.experiment.cot
-        else f"{cfg.student.model}_on_{cfg.data.filename}_rlhf_dagger.jsonl"
+        f"{cfg.student.model}_cot_rlhf_iter{cfg.gen.dagger_iter}_train.jsonl" if cfg.experiment.cot else f"{cfg.student.model}_rlhf_iter{cfg.gen.dagger_iter}_train.jsonl"
+    )
+    val_fpath_dpo = os.path.join(
+        str(cfg.paths.data),
+        str(cfg.teacher.model),
+        str(cfg.experiment.dataset),
+        f"{cfg.student.model}_cot_rlhf_iter{cfg.gen.dagger_iter}_val.jsonl" if cfg.experiment.cot else f"{cfg.student.model}_rlhf_iter{cfg.gen.dagger_iter}_val.jsonl"
     )
 
     ckpt_dir_sft = os.path.join(
@@ -383,8 +412,8 @@ def main(cfg: DictConfig) -> None:
     # SFT
     train_sft(
         tokenizer=tokenizer,
-        data_fpath=train_fpath_sft,
-        base_model_fpath=cfg.train.model_fpath,
+        train_fpath=train_fpath_sft,
+        val_fpath=val_fpath_sft,
         out_dir=ckpt_dir_sft,
         use_4bit=cfg.train.sft_use_4bit,
         lora_r=cfg.train.lora_r,
@@ -399,8 +428,8 @@ def main(cfg: DictConfig) -> None:
     # DPO (start from SFT adapter)
     train_dpo(
         tokenizer,
-        train_fpath_dpo,
-        base_model_fpath=cfg.train.model_fpath,
+        train_fpath=train_fpath_dpo,
+        val_fpath=val_fpath_dpo,
         init_adapter_dir=ckpt_dir_sft,
         out_dir=ckpt_dir_dpo,
         use_4bit=cfg.train.rlhf_use_4bit,
@@ -414,6 +443,9 @@ def main(cfg: DictConfig) -> None:
         epochs=cfg.train.rlhf_epochs
     )
 
+    elapsed = time.perf_counter() - start_time
+    logger.info("Total time elapsed: %s", timedelta(seconds=int(elapsed)))
+
+
 if __name__ == "__main__":
-    os.environ["HYDRA_FULL_ERROR"] = "1"
     main()
