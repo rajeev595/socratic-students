@@ -323,7 +323,7 @@ def process_problem(
 
 
 def count_examples(data):
-    thresholds = [0.1, 0.2, 0.3, 0.4, 0.5]
+    thresholds = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
     ks = ["1", "5", "10"]
 
     # Initialize counters
@@ -347,9 +347,10 @@ def count_examples(data):
             logger.info(f"  < {th}: {counts[k][th]}\n" if th == thresholds[-1] else f"  < {th}: {counts[k][th]}")
 
 
-def save_train_test_split(
+def save_train_test_val_split(
     data,
-    size: float,
+    train_size: float,
+    val_size: float,
     dir: str,
     name: str,
     pass_k: int,
@@ -369,7 +370,8 @@ def save_train_test_split(
     # Shuffle before split to train-test
     shuffle(hard)
     total_num = len(hard)
-    num_train = int(size * total_num)
+    num_train = int(train_size * total_num)
+    num_val = int(val_size * total_num)
 
     # Save train examples
     train_fpath = os.path.join(dir, f"{name}_train.json")
@@ -380,14 +382,23 @@ def save_train_test_split(
     )
     logger.info("Train-split: %d problems at %s", num_train, train_fpath)
 
+    # Save val examples
+    val_fpath = os.path.join(dir, f"{name}_val.json")
+    save_json_atomic(
+        path=val_fpath,
+        obj=hard[num_train: num_train + num_val],
+        indent=2
+    )
+    logger.info("Val-split: %d problems at %s", num_val, val_fpath)
+
     # Save test examples
     test_fpath = os.path.join(dir, f"{name}_test.json")
     save_json_atomic(
         path=test_fpath,
-        obj=hard[num_train: ],
+        obj=hard[num_train + num_val: ],
         indent=2
     )
-    logger.info("Train-split: %d problems at %s", total_num - num_train, test_fpath)
+    logger.info("Train-split: %d problems at %s", total_num - num_train - num_val, test_fpath)
 
 
 # ---------------------------------------------------------------------
@@ -548,9 +559,10 @@ def main(cfg: DictConfig) -> None:
     count_examples(collected)
 
     # Train-test split
-    save_train_test_split(
+    save_train_test_val_split(
         data=collected,
-        size=cfg.train.size,
+        train_size=cfg.train.train_size,
+        val_size=cfg.train.val_size,
         dir=teacher_dir,
         name=student_name,
         pass_k=cfg.gen.pass_k,

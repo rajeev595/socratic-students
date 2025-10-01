@@ -30,7 +30,7 @@ from codes.evaluation.math import generate_math_completions, evaluate_math_compl
 from codes.evaluation.utils import compute_pass_at_k
 from codes.utils.llm.server import build_client
 from codes.utils.vars import set_envs
-from codes.data.code.sample_hard import count_examples, save_train_test_split
+from codes.data.code.sample_hard import count_examples, save_train_test_val_split
 from codes.utils.file_ops import save_json_atomic, load_json_resilient
 
 
@@ -320,9 +320,10 @@ def main(cfg: DictConfig) -> None:
     count_examples(collected)
 
     # Train-test split
-    save_train_test_split(
+    save_train_test_val_split(
         data=collected,
-        size=cfg.train.size,
+        train_size=cfg.train.train_size,
+        val_size=cfg.train.val_size,
         dir=teacher_dir,
         name=student_name,
         pass_k=cfg.gen.pass_k,
