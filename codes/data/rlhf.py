@@ -1,7 +1,9 @@
 import os
-import random
+import time
 import json
+import random
 import logging
+from datetime import timedelta
 from typing import Any, List, Dict, Tuple
 
 import hydra
@@ -14,7 +16,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from codes.data.utils import format_messages, msgs_to_string
 from codes.prompts.utils import _select_sys_prompt, _problem_greeting
 from codes.run_interact import interact, evaluate, get_assessment
-from codes.llm_utils import set_openai_key_env, build_client
+from codes.utils.llm.server import build_client
+from codes.utils.vars import set_envs
+from codes.utils.file_ops import save_json_atomic, load_json_resilient
 
 
 logger = logging.getLogger(__name__)
@@ -37,6 +41,7 @@ def run_problem(
     k_values: List[int],
     pass_k: int,
     num_samples: int,
+    rlhf_samples: int,
     assessment_turn: int,
     start_from_turn: int = 1,
     total_turns: int = 10,
@@ -93,7 +98,7 @@ def run_problem(
             True,
             texts,
             interaction_problem,
-            num_samples,
+            rlhf_samples,
             data_type,
             student_client,
             student_name,
@@ -126,15 +131,18 @@ def run_problem(
         for student_reply, teacher_reply in zip(student_replies, teacher_replies):
             prev_convo = msgs_to_string(texts + [student_reply, teacher_reply])
             pass_at_k_scores_sample, _, p_tks, c_tks = evaluate(
-                prev_convo,
-                data_type,
-                student_client,
-                student_name,
-                0.3,
-                evaluation_problem,
-                k_values,
-                max(k_values),
-                is_ood
+                prev_convo=prev_convo,
+                data_type=data_type,
+                student_client=student_client,
+                student_name=student_name,
+                student_temperature=0.3,
+                teacher_client=teacher_client,
+                teacher_name=teacher_name,
+                teacher_temperature=teacher_temperature,
+                problem=evaluation_problem,
+                k_values=k_values,
+                num_samples=num_samples,
+                is_ood=is_ood,
             )
 
             # Update pass@k scores and token counts
@@ -158,10 +166,10 @@ def run_problem(
             texts += [student_replies[best_idx], teacher_replies[best_idx]]
             propensity = 1 - eps
         else:
-            non_best = [i for i in range(num_samples) if i != best_idx]
+            non_best = [i for i in range(rlhf_samples) if i != best_idx]
             idx = random.choice(non_best)
             texts += [student_replies[idx], teacher_replies[idx]]
-            propensity = eps / num_samples
+            propensity = eps / rlhf_samples
 
         if max_value < 0.85:
             continue
@@ -205,21 +213,23 @@ def run_problem(
 
 @hydra.main(version_base=None, config_path="../../configs", config_name="config.yaml")
 def main(cfg: DictConfig) -> None:
-    # set the OpenAI key env variable
-    set_openai_key_env(cfg.paths.openai_api_key_fpath)
+    start_time = time.perf_counter()  # ---- start timer ----
+
+    # set the OpenAI key env variable, HF HOME
+    set_envs(cfg.paths.openai_api_key_fpath, cfg.paths.hf_home)
 
     # Check if data exists already and load it
     train_fpath_sft = os.path.join(
         str(cfg.paths.data),
         str(cfg.teacher.model),
         str(cfg.experiment.dataset),
-        f"{cfg.student.model}_on_{cfg.data.filename}_cot_sft_dagger.jsonl" if cfg.experiment.cot else f"{cfg.student.model}_on_{cfg.data.filename}_sft_dagger.jsonl"
+        f"{cfg.student.model}_cot_sft_iter{cfg.gen.dagger_iter}.jsonl" if cfg.experiment.cot else f"{cfg.student.model}_sft_iter{cfg.gen.dagger_iter}.jsonl"
     )
     train_fpath_rlhf = os.path.join(
         str(cfg.paths.data),
         str(cfg.teacher.model),
         str(cfg.experiment.dataset),
-        f"{cfg.student.model}_on_{cfg.data.filename}_cot_rlhf_dagger.jsonl" if cfg.experiment.cot else f"{cfg.student.model}_on_{cfg.data.filename}_rlhf_dagger.jsonl"
+        f"{cfg.student.model}_cot_rlhf_iter{cfg.gen.dagger_iter}.jsonl" if cfg.experiment.cot else f"{cfg.student.model}_rlhf_iter{cfg.gen.dagger_iter}.jsonl"
     )
 
     existing_pids = set()
@@ -247,11 +257,10 @@ def main(cfg: DictConfig) -> None:
         str(cfg.paths.data),
         str(cfg.teacher.model),
         str(cfg.experiment.dataset),
-        f"{cfg.data.filename}_train.json",
+        f"{cfg.student.model}_train.json",
     )
     logger.info(f"Loading interaction problems: {problems_fpath}")
-    with open(problems_fpath, "r") as f:
-        data: List[Dict[str, Any]] = json.load(f)
+    data = load_json_resilient(problems_fpath)
     interaction_problems: List[Dict[str, Any]] = [
         p for p in data if p["id"] not in existing_pids
     ][: cfg.data.data_amount]
@@ -264,24 +273,24 @@ def main(cfg: DictConfig) -> None:
             str(cfg.paths.data),
             str(cfg.teacher.model),
             str(cfg.experiment.dataset),
-            f"{cfg.data.filename}_ood_train.json",
+            f"{cfg.student.model}_ood_train.json",
         )
 
         logger.info(f"Loading evaluation (OOD) problems: {ood_problems_path}")
-        with open(ood_problems_path, "r") as f:
-            data = json.load(f)
-            evaluation_problems = [
-                p for p in data if p["id"] not in existing_pids
-            ][: cfg.data.data_amount]
+        data = load_json_resilient(ood_problems_path)
+        evaluation_problems = [
+            p for p in data if p["id"] not in existing_pids
+        ][: cfg.data.data_amount]
 
         logger.info(f"Total evaluation (OOD) problems: {len(evaluation_problems)}")
 
-    # Build clients
-    teacher_name, teacher_client = build_client(
-        cfg.teacher.model, cfg.teacher.fpath, cfg.teacher.server
+    # Build teacher and student clients (names may be normalized inside)
+    teacher_name, student_name = cfg.teacher.model, cfg.student.model
+    teacher_client = build_client(
+        teacher_name, cfg.teacher.gpus, cfg.teacher.server
     )
-    student_name, student_client = build_client(
-        cfg.student.model, cfg.student.fpath, cfg.student.server
+    student_client = build_client(
+        student_name, cfg.student.gpus, cfg.student.server
     )
     logger.info("Teacher=%s | Student=%s", teacher_name, student_name)
 
@@ -310,6 +319,7 @@ def main(cfg: DictConfig) -> None:
                 cfg.gen.k_values,
                 cfg.gen.pass_k,
                 cfg.gen.num_samples,
+                cfg.gen.rlhf_samples,
                 cfg.experiment.assessment_turn,
                 cfg.experiment.start_from_turn,
                 cfg.experiment.total_turns,
@@ -359,7 +369,9 @@ def main(cfg: DictConfig) -> None:
         f"{cfg.student.model} token usage: prompt={total_student_prompt_tks}, completion={total_student_completion_tks}"
     )
 
+    elapsed = time.perf_counter() - start_time
+    logger.info("Total time elapsed: %s", timedelta(seconds=int(elapsed)))
+
 
 if __name__ == "__main__":
-    os.environ["HYDRA_FULL_ERROR"] = "1"
     main()

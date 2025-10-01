@@ -1,7 +1,9 @@
 import os
-import random
+import time
 import json
+import random
 import logging
+from datetime import timedelta
 from typing import Any, List, Dict, Tuple
 
 import hydra
@@ -14,7 +16,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from codes.data.utils import format_messages, msgs_to_string
 from codes.prompts.utils import _select_sys_prompt, _problem_greeting
 from codes.run_interact import interact, evaluate, get_assessment
-from codes.llm_utils import set_openai_key_env, build_client
+from codes.utils.llm.server import build_client
+from codes.utils.vars import set_envs
 
 
 logger = logging.getLogger(__name__)
@@ -147,15 +150,18 @@ def run_problem(
         for student_reply, teacher_reply in zip(questions, teacher_replies):
             prev_convo = msgs_to_string(texts + [student_reply, teacher_reply])
             pass_at_k_scores_sample, _, p_tks, c_tks = evaluate(
-                prev_convo,
-                data_type,
-                student_client,
-                student_name,
-                0.3,
-                evaluation_problem,
-                k_values,
-                max(k_values),
-                is_ood
+                prev_convo=prev_convo,
+                data_type=data_type,
+                student_client=student_client,
+                student_name=student_name,
+                student_temperature=0.3,
+                teacher_client=teacher_client,
+                teacher_name=teacher_name,
+                teacher_temperature=teacher_temperature,
+                problem=evaluation_problem,
+                k_values=k_values,
+                num_samples=num_samples,
+                is_ood=is_ood,
             )
 
             # Update pass@k scores and token counts
@@ -229,8 +235,10 @@ def run_problem(
 
 @hydra.main(version_base=None, config_path="../../configs", config_name="config.yaml")
 def main(cfg: DictConfig) -> None:
-    # set the OpenAI key env variable
-    set_openai_key_env(cfg.paths.openai_api_key_fpath)
+    start_time = time.perf_counter()  # ---- start timer ----
+
+    # set the OpenAI key env variable, HF HOME
+    set_envs(cfg.paths.openai_api_key_fpath, cfg.paths.hf_home)
 
     # Check if data exists already and load it
     train_fpath_sft = os.path.join(
@@ -301,16 +309,18 @@ def main(cfg: DictConfig) -> None:
         ][: cfg.data.data_amount]
         logger.info(f"Total evaluation (OOD) problems: {len(evaluation_problems)}")
 
-    # Build clients
-    teacher_name, teacher_client = build_client(
-        cfg.teacher.model, cfg.teacher.fpath, cfg.teacher.server
+    # Build teacher and student clients (names may be normalized inside)
+    teacher_name, student_name, guide_name = cfg.teacher.model, cfg.student.model, cfg.guide.model
+    teacher_client = build_client(
+        teacher_name, cfg.teacher.gpus, cfg.teacher.server
     )
-    student_name, student_client = build_client(
-        cfg.student.model, cfg.student.fpath, cfg.student.server
+    student_client = build_client(
+        student_name, cfg.student.gpus, cfg.student.server
     )
-    guide_name, guide_client = build_client(
-        cfg.guide.model, cfg.guide.fpath, cfg.guide.server
-    )
+    guide_client = build_client(
+        guide_name, cfg.guide.gpus, cfg.guide.server
+    )    
+    logger.info("Teacher=%s | Student=%s | Guide=%s", teacher_name, student_name, guide_name)
 
     total_teacher_prompt_tks = total_teacher_completion_tks = 0
     total_student_prompt_tks = total_student_completion_tks = 0
@@ -396,6 +406,9 @@ def main(cfg: DictConfig) -> None:
     logger.info(
         f"Guide-{cfg.guide.model} token usage: prompt={total_guide_prompt_tks}, completion={total_guide_completion_tks}"
     )
+
+    elapsed = time.perf_counter() - start_time
+    logger.info("Total time elapsed: %s", timedelta(seconds=int(elapsed)))
 
 
 if __name__ == "__main__":
