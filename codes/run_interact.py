@@ -288,10 +288,10 @@ def run_problem(
 
             pass_at_k_scores[turn] = pass_at_k_scores_turn
             total_student_prompt_tks += p_tks
-            total_teacher_completion_tks += c_tks
+            total_student_completion_tks += c_tks
             generations[turn] = generations_turn
 
-            logger.debug(f"[{evaluation_problem["id"]}] turn {turn} pass@k={pass_at_k_scores[turn]}")
+            logger.debug(f"[{evaluation_problem['id']}] turn {turn} pass@k={pass_at_k_scores[turn]}")
 
         # Run interaction step
         replies, p_tks, c_tks = interact(
