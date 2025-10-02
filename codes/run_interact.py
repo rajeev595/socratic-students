@@ -36,9 +36,12 @@ logging.basicConfig(
 # ---------- helpers ----------
 def get_assessment(
     data_type: str,
-    client: OpenAI,
-    model_name: str,
-    temperature: float,
+    student_client: OpenAI,
+    student_name: str,
+    student_temperature: float,
+    teacher_client: OpenAI,
+    teacher_name: str,
+    teacher_temperature: float,
     problem_dict: Dict[str, Any],
     texts: List[str],
 ) -> str:
@@ -51,14 +54,16 @@ def get_assessment(
 
     # Pick generator/evaluator based on dataset
     gen = generate_code_completions if data_type == "code" else generate_math_completions
-    efunc = evaluate_code_completion if data_type == "code" else evaluate_math_completion
+    efunc = evaluate_code_completion if data_type == "code" else lambda x, y: evaluate_math_completion(
+        x, y, teacher_client, teacher_name, teacher_temperature
+    )
 
     # IMPORTANT: math/code generators use different kw names; route accordingly
     gen_kwargs = dict(
         previous_conversation_str=prev_convo,
-        client=client,
-        model_name=model_name,
-        temperature=float(temperature),
+        client=student_client,
+        model_name=student_name,
+        temperature=float(student_temperature),
         num_samples=2,
         show_gt=False,
     )
@@ -251,9 +256,12 @@ def run_problem(
         if assessment_turn > 0 and turn == assessment_turn and len(texts) > 0:
             texts[-1] += get_assessment(
                 data_type=data_type,
-                client=student_client,
-                model_name=student_name,
-                temperature=student_temperature,
+                student_client=student_client,
+                student_name=student_name,
+                student_temperature=student_temperature,
+                teacher_client=teacher_client,
+                teacher_name=teacher_name,
+                teacher_temperature=teacher_temperature,
                 problem_dict=interaction_problem,
                 texts=texts,
             )

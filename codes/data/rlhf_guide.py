@@ -87,9 +87,12 @@ def run_problem(
         if assessment_turn > 0 and turn == assessment_turn and len(texts) > 0:
             texts[-1] += get_assessment(
                 data_type=data_type,
-                client=student_client,
-                model_name=student_name,
+                student_client=student_client,
+                student_name=student_name,
                 student_temperature=student_temperature,
+                teacher_client=teacher_client,
+                teacher_name=teacher_name,
+                teacher_temperature=teacher_temperature,
                 problem_dict=interaction_problem,
                 texts=texts,
             )
