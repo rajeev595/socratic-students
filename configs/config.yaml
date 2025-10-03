@@ -13,6 +13,7 @@ teacher:
 
 student:
   model: qwen7
+  lora:
   temperature: 0.8
   server: "sglang"  # SGLang/vLLM
   gpus: [4,5,6,7]
@@ -26,15 +27,16 @@ guide:
 # Data & paths
 data:
   type: math                    # code or math
-  filename: qwen7
   data_amount: 10000000
+  split: train
 
 # Generation / evaluation
 gen:
   k_values: [1, 5, 10]
   num_samples: 25
-  pass_k: 10
-  pass_at_k_threshold: 0.4
+  rlhf_samples: 5
+  pass_k: 5
+  pass_at_k_threshold: 0.5
   eps: 0.2                      # epsilon-greedy exploration
   retry_on_fail: 5
   take_every: 1                 # only used for math dataset
@@ -42,7 +44,8 @@ gen:
 
 # Direct Preference Optimization (DPO) settings
 train:
-  size: 0.7
+  train_size: 0.5
+  val_size: 0.2
   sft_use_4bit: False
   rlhf_use_4bit: True
   lora_r: 16
@@ -50,13 +53,19 @@ train:
   lora_dropout: 0.05
   sft_batch_size: 4
   rlhf_batch_size: 2
+  grpo_batch_size_groups: 2
   grad_accum: 8
   sft_lr: 1e-4
   rlhf_lr: 1e-5
+  grpo_lr: 5e-6  
   beta: 0.2
-  sft_epochs: 2
-  rlhf_epochs: 2
-  gpus: [0]
+  sft_epochs: 5
+  rlhf_epochs: 5
+  grpo_epochs: 2
+  grpo_tau: 0.7
+  grpo_reward_norm: "zscore"
+  grpo_kl_coeff: 0.02  
+  gpus: [0,1,2,3,4,5,6,7]
 
 # Experiment settings
 experiment:
@@ -64,8 +73,8 @@ experiment:
   cot: False
   ood: False
   dataset: gsm8k        # code - humaneval_opc/mbpp, math - gsm8k
-  assessment_turn: -1           # -1 (none), 1 (pre), 5 (mid)
-  start_from_turn: 1            # 1 (new), odd (student), even (teacher)
+  assessment_turn: -1   # -1 (none), 1 (pre), 5 (mid)
+  start_from_turn: 1    # 1 (new), odd (student), even (teacher)
   total_turns: 11
   num_workers: 32
 
