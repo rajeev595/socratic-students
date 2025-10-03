@@ -367,6 +367,9 @@ def save_train_test_val_split(
         if s < pass_at_k_threshold:
             hard.append(d["problem"])
 
+    if len(hard) >= 10000:
+        hard = hard[: len(hard)//10]
+
     # Shuffle before split to train-test
     shuffle(hard)
     total_num = len(hard)
@@ -398,7 +401,7 @@ def save_train_test_val_split(
         obj=hard[num_train + num_val: ],
         indent=2
     )
-    logger.info("Train-split: %d problems at %s", total_num - num_train - num_val, test_fpath)
+    logger.info("Test-split: %d problems at %s", total_num - num_train - num_val, test_fpath)
 
 
 # ---------------------------------------------------------------------
