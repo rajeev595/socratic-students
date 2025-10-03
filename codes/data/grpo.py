@@ -259,39 +259,39 @@ def main(cfg: DictConfig) -> None:
     set_envs(cfg.paths.openai_api_key_fpath, cfg.paths.hf_home)
 
     # Output files (SFT, DPO, GRPO)
-    train_fpath_sft = os.path.join(
+    fpath_sft = os.path.join(
         str(cfg.paths.data),
         str(cfg.teacher.model),
         str(cfg.experiment.dataset),
-        f"{cfg.student.model}_cot_sft_iter{cfg.gen.dagger_iter}.jsonl" if cfg.experiment.cot else f"{cfg.student.model}_sft_iter{cfg.gen.dagger_iter}.jsonl"
+        f"{cfg.student.model}_cot_sft_iter{cfg.gen.dagger_iter}_{cfg.data.split}.jsonl" if cfg.experiment.cot else f"{cfg.student.model}_sft_iter{cfg.gen.dagger_iter}_{cfg.data.split}.jsonl"
     )
-    train_fpath_rlhf = os.path.join(
+    fpath_rlhf = os.path.join(
         str(cfg.paths.data),
         str(cfg.teacher.model),
         str(cfg.experiment.dataset),
-        f"{cfg.student.model}_cot_rlhf_iter{cfg.gen.dagger_iter}.jsonl" if cfg.experiment.cot else f"{cfg.student.model}_rlhf_iter{cfg.gen.dagger_iter}.jsonl"
+        f"{cfg.student.model}_cot_rlhf_iter{cfg.gen.dagger_iter}_{cfg.data.split}.jsonl" if cfg.experiment.cot else f"{cfg.student.model}_rlhf_iter{cfg.gen.dagger_iter}_{cfg.data.split}.jsonl"
     )
-    train_fpath_grpo = os.path.join(
+    fpath_grpo = os.path.join(
         str(cfg.paths.data),
         str(cfg.teacher.model),
         str(cfg.experiment.dataset),
-        f"{cfg.student.model}_cot_grpo_iter{cfg.gen.dagger_iter}.jsonl" if cfg.experiment.cot else f"{cfg.student.model}_grpo_iter{cfg.gen.dagger_iter}.jsonl"
+        f"{cfg.student.model}_cot_grpo_iter{cfg.gen.dagger_iter}_{cfg.data.split}.jsonl" if cfg.experiment.cot else f"{cfg.student.model}_grpo_iter{cfg.gen.dagger_iter}_{cfg.data.split}.jsonl"
     )
 
     existing_pids = set()
     count_rlhf, count_sft, count_grpo = 0, 0, 0
 
     # Resume dedupe by dagger_iter for SFT/DPO (unchanged)
-    if os.path.exists(train_fpath_sft):
-        with open(train_fpath_sft, "r") as f:
+    if os.path.exists(fpath_sft):
+        with open(fpath_sft, "r") as f:
             for line in f:
                 ex = json.loads(line)
                 if ex.get("dagger_iter") == cfg.gen.dagger_iter:
                     existing_pids.add(ex["problem"]["id"])
-        logger.info(f"Loaded {len(existing_pids)} existing SFT-{cfg.gen.dagger_iter} examples from {train_fpath_sft}")
+        logger.info(f"Loaded {len(existing_pids)} existing SFT-{cfg.gen.dagger_iter} examples from {fpath_sft}")
 
-    if os.path.exists(train_fpath_rlhf):
-        with open(train_fpath_rlhf, "r") as f:
+    if os.path.exists(fpath_rlhf):
+        with open(fpath_rlhf, "r") as f:
             for line in f:
                 ex = json.loads(line)
                 if ex.get("dagger_iter") == cfg.gen.dagger_iter:
@@ -302,7 +302,7 @@ def main(cfg: DictConfig) -> None:
         str(cfg.paths.data),
         str(cfg.teacher.model),
         str(cfg.experiment.dataset),
-        f"{cfg.student.model}_train.json",
+        f"{cfg.student.model}_{cfg.data.split}.json",
     )
     logger.info(f"Loading interaction problems: {problems_fpath}")
     data = load_json_resilient(problems_fpath)
@@ -318,7 +318,7 @@ def main(cfg: DictConfig) -> None:
             str(cfg.paths.data),
             str(cfg.teacher.model),
             str(cfg.experiment.dataset),
-            f"{cfg.student.model}_ood_train.json",
+            f"{cfg.student.model}_ood_{cfg.data.split}.json",
         )
         logger.info(f"Loading evaluation (OOD) problems: {ood_problems_path}")
         data = load_json_resilient(ood_problems_path)
@@ -337,9 +337,9 @@ def main(cfg: DictConfig) -> None:
     total_student_prompt_tks = total_student_completion_tks = 0
 
     # Open files
-    f_rlhf = open(train_fpath_rlhf, "a" if os.path.exists(train_fpath_rlhf) else "w")
-    f_sft = open(train_fpath_sft, "a" if os.path.exists(train_fpath_sft) else "w")
-    f_grpo = open(train_fpath_grpo, "a" if os.path.exists(train_fpath_grpo) else "w")
+    f_rlhf = open(fpath_rlhf, "a" if os.path.exists(fpath_rlhf) else "w")
+    f_sft = open(fpath_sft, "a" if os.path.exists(fpath_sft) else "w")
+    f_grpo = open(fpath_grpo, "a" if os.path.exists(fpath_grpo) else "w")
 
     # Build everything in parallel
     with ThreadPoolExecutor(max_workers=cfg.experiment.num_workers) as executor:
@@ -409,9 +409,10 @@ def main(cfg: DictConfig) -> None:
     f_grpo.close()
 
     # Log summary
-    logger.info(f"Saved {count_rlhf} preference pairs to {train_fpath_rlhf}")
-    logger.info(f"Saved {count_sft} SFT examples to {train_fpath_sft}")
-    logger.info(f"Saved {count_grpo} GRPO groups to {train_fpath_grpo}")
+    logger.info(f"------- {cfg.data.split} -------")
+    logger.info(f"Saved {count_rlhf} preference pairs to {fpath_rlhf}")
+    logger.info(f"Saved {count_sft} SFT examples to {fpath_sft}")
+    logger.info(f"Saved {count_grpo} GRPO groups to {fpath_grpo}")
     logger.info(
         f"{cfg.teacher.model} token usage: prompt={total_teacher_prompt_tks}, completion={total_teacher_completion_tks}"
     )
