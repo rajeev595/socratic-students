@@ -87,6 +87,19 @@ def remove_think_tags(text: str) -> str:
     return text
 
 
+def extract_question(s: str) -> str:
+    _QTAG = re.compile(r"<question>\s*(.*?)\s*</question>", re.S | re.I)
+    s = (s or "").strip()
+    m = _QTAG.search(s)
+    if m:
+        q = m.group(1).strip()
+    else:
+        lines = [ln.strip() for ln in s.splitlines() if ln.strip()]
+        q = next((ln for ln in reversed(lines) if ln.endswith("?")), (lines[-1] if lines else ""))
+    q = " ".join(q.split())
+    return q
+
+
 # ---------------------------------------------------------------------------
 # Conversation formatting
 # ---------------------------------------------------------------------------

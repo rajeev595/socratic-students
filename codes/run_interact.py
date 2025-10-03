@@ -19,10 +19,10 @@ from openai import OpenAI
 from codes.utils.llm.server import build_client
 from codes.utils.llm.chat import chat_complete
 from codes.utils.vars import set_envs
-from codes.data.utils import remove_think_tags, msgs_to_string, format_messages
+from codes.data.utils import remove_think_tags, msgs_to_string, format_messages, extract_question
 from codes.prompts.utils import _select_sys_prompt, _problem_greeting
-from codes.evaluation.code import generate_code_completions, evaluate_code_completion
-from codes.evaluation.math import generate_math_completions, evaluate_math_completion
+from codes.evaluation.code import generate_code_completions, evaluate_code_completion, get_code_feedback_from_eval
+from codes.evaluation.math import generate_math_completions, evaluate_math_completion, get_math_feedback_from_eval
 from codes.evaluation.utils import compute_pass_at_k, bootstrap_aggregate
 
 
@@ -53,10 +53,17 @@ def get_assessment(
     prev_convo = msgs_to_string(texts)
 
     # Pick generator/evaluator based on dataset
-    gen = generate_code_completions if data_type == "code" else generate_math_completions
-    efunc = evaluate_code_completion if data_type == "code" else lambda x, y: evaluate_math_completion(
-        x, y, teacher_client, teacher_name, teacher_temperature
-    )
+    if data_type == "code":
+        gen_fn = generate_code_completions
+        eval_fn = evaluate_code_completion
+        feedback_fn = get_code_feedback_from_eval
+
+    elif data_type == "math":
+        gen_fn = generate_math_completions
+        eval_fn = lambda x, y: evaluate_math_completion(
+            x, y, teacher_client, teacher_name, teacher_temperature
+        )
+        feedback_fn = get_math_feedback_from_eval
 
     # IMPORTANT: math/code generators use different kw names; route accordingly
     gen_kwargs = dict(
@@ -72,11 +79,11 @@ def get_assessment(
     else:
         gen_kwargs["problem"] = problem_dict
 
-    completions, _, _ = gen(**gen_kwargs)
+    completions, _, _ = gen_fn(**gen_kwargs)
 
     results: List[bool] = []
     for comp in completions:
-        _, ok = efunc(comp, problem_dict)
+        _, ok = eval_fn(comp, problem_dict)
         results.append(ok)
 
     msg = (
@@ -84,7 +91,11 @@ def get_assessment(
         "along with my feedback.\n"
     )
     for i, (comp, ok) in enumerate(zip(completions, results), start=1):
-        msg += f"\n--- Your response {i} ---\n{comp}\n--- Evaluation result: {ok} ---\n"
+        status = "PASS" if ok else "FAIL"
+        feedback, _, _ = feedback_fn(
+            teacher_name, teacher_temperature, teacher_client, problem_dict, comp, status
+        )
+        msg += f"\n--- Your response {i} ---\n{comp}\n--- Evaluation result: {status} ---\n--- Feedback: {feedback} ---\n"
     return msg
 
 
@@ -120,6 +131,10 @@ def interact(
         reply = (text if text else "").strip()
         if ("<think>" in reply) or ("</think>" in reply):
             reply = remove_think_tags(reply)
+
+        if is_student and use_cot:
+            reply = extract_question(reply)
+
         replies.append(reply)
 
     return replies, p_tks, c_tks

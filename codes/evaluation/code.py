@@ -28,6 +28,7 @@ import os
 import sys
 import tempfile
 import subprocess
+from openai import OpenAI
 from typing import List, Dict, Any, Tuple, Optional
 
 from codes.data.utils import (
@@ -208,3 +209,43 @@ def evaluate_code_completion(
             except OSError:
                 # Best-effort cleanup; ignore if another process already removed it
                 pass
+
+
+TEACHER_FEEDBACK_SYS = """\
+You are an expert Python tutor. You will be given:
+- the problem statement,
+- one student attempt (code),
+- and a compact summary of test outcomes.
+
+Your job: provide concise, actionable feedback. DO NOT provide code or patches.
+"""
+
+def get_code_feedback_from_eval(
+    model_name: str,
+    temperature: float,
+    client: OpenAI,
+    problem: Dict[str, Any],
+    student_code: str,
+    eval_summary: str,
+):
+    """Call the teacher LLM to produce feedback (no code)."""
+    user_msg = (
+        f"Problem:\n{problem['prompt']}\n\n"
+        "Student attempt (for analysis only):\n"
+        "```python\n" + student_code + "\n```\n\n"
+        f"Test outcomes:\n{eval_summary}\n\n"
+        "Provide feedback following the required format. Do not include code."
+    )
+    messages = [
+        {"role": "system", "content": TEACHER_FEEDBACK_SYS},
+        {"role": "user", "content": user_msg},
+    ]
+    texts, p_tks, c_tks = chat_complete(
+        client=client,
+        model_name=model_name,
+        messages=messages,
+        n=1,
+        temperature=temperature,
+        max_tokens=300,
+    )
+    return texts[0].strip(), p_tks, c_tks

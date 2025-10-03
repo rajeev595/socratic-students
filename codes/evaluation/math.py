@@ -187,3 +187,65 @@ def evaluate_math_completion(
     )
 
     return model_response, reply[0].startswith("yes")
+
+
+MATH_FEEDBACK_SYS = """\
+You are an expert math tutor (GSM8K style). You will be given:
+- the problem statement,
+- one student solution attempt (their reasoning and/or final answer),
+- and a compact evaluation summary (e.g., Correct/Incorrect + brief reason).
+
+Your job: provide concise, actionable feedback.
+Do NOT provide the full solution or the final numeric answer.
+Focus on: where the reasoning likely went off, the correct setup/units, and a next step to fix it.
+"""
+
+def get_math_feedback_from_eval(
+    model_name: str,
+    temperature: float,
+    client: OpenAI,
+    problem: Dict[str, Any],
+    student_solution: str,
+    eval_summary: str,
+) -> Tuple[str, int, int]:
+    """
+    Produce tutor feedback (no final numeric answer) for a GSM8K-style attempt.
+
+    Args:
+        model_name: teacher LLM name
+        temperature: sampling temperature for feedback
+        client: OpenAI-style client
+        problem: dict with 'prompt' or 'question'
+        student_solution: student's written attempt (reasoning/answer)
+        eval_summary: compact outcome (e.g., 'Incorrect: arithmetic slip when multiplying 24×3';
+                      or 'Correct', or 'Mismatch with expected units')
+
+    Returns:
+        feedback_text, prompt_tokens, completion_tokens
+    """
+    prompt_text = problem.get("prompt", problem.get("question", ""))
+
+    user_msg = (
+        f"Problem:\n{prompt_text}\n\n"
+        "Student attempt (for analysis only):\n"
+        + student_solution + "\n\n"
+        f"Evaluation summary (compact):\n{eval_summary}\n\n"
+        "Provide concise, actionable feedback without giving the final numeric answer."
+    )
+
+    messages = [
+        {"role": "system", "content": MATH_FEEDBACK_SYS},
+        {"role": "user", "content": user_msg},
+    ]
+
+    texts, p_tks, c_tks = chat_complete(
+        client=client,
+        model_name=model_name,
+        messages=messages,
+        n=1,
+        temperature=temperature,
+        max_tokens=250,
+    )
+
+    feedback = (texts[0] or "").strip()
+    return feedback, p_tks, c_tks
