@@ -27,7 +27,9 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s: %(message)s",
 )
 
-
+# -------------------------
+# Helpers
+# -------------------------
 def _extract_text(msg: Any) -> str:
     """Best-effort extraction of the question text from a message-like object."""
     if isinstance(msg, dict) and "content" in msg:
@@ -39,7 +41,37 @@ def _extract_text(msg: Any) -> str:
     except Exception:
         return str(msg)
 
+def _get_score(score_dict: Dict[Any, float], k: int) -> float:
+    """
+    Access pass@k from a dict that may have int or str keys.
+    Falls back to the largest available k if not present.
+    """
+    if score_dict is None:
+        return 0.0
+    if k in score_dict:
+        return float(score_dict[k])
+    ks = list(score_dict.keys())
+    # try string form
+    if str(k) in score_dict:
+        return float(score_dict[str(k)])
+    # try int-cast on all keys and take max
+    try:
+        int_keys = [int(x) for x in ks]
+        best_k = int_keys[int_keys.index(max(int_keys))]
+        return float(score_dict.get(best_k, score_dict.get(str(best_k), 0.0)))
+    except Exception:
+        # as a last resort, take any numeric-looking value
+        try:
+            return float(next(iter(score_dict.values())))
+        except Exception:
+            return 0.0
 
+def _to_float_dict(d: Dict[Any, Any]) -> Dict[Any, float]:
+    return { (int(k) if str(k).isdigit() else k): float(v) for k, v in d.items() }
+
+# -------------------------
+# Core runner
+# -------------------------
 def run_problem(
     data_type: str,
     teacher_client: OpenAI,
@@ -60,18 +92,23 @@ def run_problem(
     eps: float = 0.2,
     use_cot: bool = False,
     is_ood: bool = False,
+    # NEW knobs (read from cfg in caller)
+    use_delta_reward: bool = False,
+    dpo_margin_min: float = 0.01,
+    dpo_margin_max: float = 1.0,
+    dpo_max_pairs_per_turn: int = None,
 ) -> Tuple[
     List[Dict[str, Any]],   # chosen_list (SFT)
     List[Dict[str, Any]],   # pairs (DPO)
-    List[Dict[str, Any]],   # grpo_groups  <-- NEW
+    List[Dict[str, Any]],   # grpo_groups
     int, int, int, int
 ]:
     """
     Run a single problem end-to-end: student↔teacher interaction and inline evaluation.
     Returns:
-      - chosen_list: SFT items (unchanged)
-      - pairs: DPO pairs (unchanged)
-      - grpo_groups: list of grouped examples for GRPO/RRHF
+      - chosen_list: SFT items
+      - pairs: DPO pairs (now with delta-aware rewards if enabled)
+      - grpo_groups: list of grouped examples for GRPO/RRHF (with metrics_current/baseline/delta)
       - token usage tallies
     """
     assert interaction_problem["id"] == evaluation_problem["id"], "pid of interaction and evaluation doesn't match!"
@@ -91,7 +128,6 @@ def run_problem(
         logger.warning(f"[{pid}] resume requested but no transcript found; starting fresh")
 
     pairs, chosen_list, grpo_groups = [], [], []
-    pass_k_key = str(pass_k)  # keys in your pass@k dicts are strings
 
     for turn in range(cur_start, total_turns, 2):
         # Optional assessment injected into previous text
@@ -106,7 +142,7 @@ def run_problem(
             )
             logger.debug(f"[{pid}] assessment injected at turn {turn}")
 
-        # Run the student: sample K=rlhf_samples candidate questions
+        # ---- Student: sample K candidate questions
         student_replies, p_tks, c_tks = interact(
             True,
             texts,
@@ -121,7 +157,7 @@ def run_problem(
         total_student_prompt_tks += p_tks
         total_student_completion_tks += c_tks
 
-        # Run the teacher for each candidate
+        # ---- Teacher for each candidate
         teacher_replies = []
         for student_reply in student_replies:
             teacher_reply, p_tks, c_tks = interact(
@@ -139,12 +175,14 @@ def run_problem(
             total_teacher_prompt_tks += p_tks
             total_teacher_completion_tks += c_tks
 
-        # Evaluate each (student question, teacher answer) pair
-        pass_at_k_scores = []
+        # ---- Evaluate each (student Q, teacher A) pair
+        pass_at_k_scores_current = []
+        pass_at_k_scores_baseline = []  # for delta mode
         for student_reply, teacher_reply in zip(student_replies, teacher_replies):
-            prev_convo = msgs_to_string(texts + [student_reply, teacher_reply])
-            pass_at_k_scores_sample, _, p_tks, c_tks = evaluate(
-                prev_convo=prev_convo,
+            # current: history + candidate Q/A
+            convo_current = msgs_to_string(texts + [student_reply, teacher_reply])
+            cur_scores, _, p_tks, c_tks = evaluate(
+                prev_convo=convo_current,
                 data_type=data_type,
                 student_client=student_client,
                 student_name=student_name,
@@ -157,67 +195,104 @@ def run_problem(
                 num_samples=num_samples,
                 is_ood=is_ood,
             )
-            pass_at_k_scores.append(pass_at_k_scores_sample)
+            pass_at_k_scores_current.append(_to_float_dict(cur_scores))
             total_student_prompt_tks += p_tks
             total_student_completion_tks += c_tks
 
-        # Build prompt messages used to elicit candidate questions
+            # baseline: history *without* candidate Q/A (counterfactual)
+            if use_delta_reward:
+                convo_baseline = msgs_to_string(texts)
+                base_scores, _, p_tks, c_tks = evaluate(
+                    prev_convo=convo_baseline,
+                    data_type=data_type,
+                    student_client=student_client,
+                    student_name=student_name,
+                    student_temperature=0.3,
+                    teacher_client=teacher_client,
+                    teacher_name=teacher_name,
+                    teacher_temperature=teacher_temperature,
+                    problem=evaluation_problem,
+                    k_values=k_values,
+                    num_samples=num_samples,
+                    is_ood=is_ood,
+                )
+                pass_at_k_scores_baseline.append(_to_float_dict(base_scores))
+                total_student_prompt_tks += p_tks
+                total_student_completion_tks += c_tks
+            else:
+                pass_at_k_scores_baseline.append({})
+
+        # ---- Prompt messages used to elicit candidate questions
         sys_prompt = _select_sys_prompt(data_type, use_cot, True, evaluation_problem)
         prompt_messages = [{"role": "system", "content": sys_prompt}] + format_messages(
             texts, starting_with_user=True
         )
 
-        # ---------- NEW: collect GRPO/RRHF grouped data for this turn ----------
-        # We do NOT apply any threshold here; we keep the full K-set to avoid bias.
+        # ---------- Collect GRPO group ----------
         group = {
             "ex_id": pid,
             "turn": turn,
             "prompt_messages": prompt_messages,
             "prompt_type": "messages",
             "k": rlhf_samples,
-            "pass_k_key": pass_k,  # stored as int for clarity
+            "pass_k_key": pass_k,  # int
             "candidates": [],
         }
-        for reply, score_dict in zip(student_replies, pass_at_k_scores):
+
+        for reply, cur_scores, base_scores in zip(student_replies, pass_at_k_scores_current, pass_at_k_scores_baseline):
             q_text = _extract_text(reply)
-            # Ensure numeric rewards (prefer the chosen pass@k key; fallback to max available)
-            if str(pass_k) in score_dict:
-                reward = float(score_dict[str(pass_k)])
+
+            # reward definition
+            if use_delta_reward:
+                reward = _get_score(cur_scores, pass_k) - _get_score(base_scores, pass_k)
             else:
-                # fallback: use the largest available k
-                if len(score_dict) == 0:
-                    reward = 0.0
-                else:
-                    best_k = max(map(int, score_dict.keys()))
-                    reward = float(score_dict[str(best_k)])
+                reward = _get_score(cur_scores, pass_k)
+
+            # metrics payloads
+            metrics_current = {int(k) if str(k).isdigit() else k: float(v) for k, v in cur_scores.items()}
+            metrics_baseline = (
+                {int(k) if str(k).isdigit() else k: float(v) for k, v in base_scores.items()}
+                if use_delta_reward else {}
+            )
+            metrics_delta = (
+                {k: float(metrics_current.get(k, 0.0) - metrics_baseline.get(k, 0.0)) for k in metrics_current.keys()}
+                if use_delta_reward else {}
+            )
+
             group["candidates"].append({
                 "text": q_text,
-                "reward": reward,
-                "metrics": {k: float(v) for k, v in score_dict.items()},
+                "reward": float(reward),
+                "metrics_current": metrics_current,
+                "metrics_baseline": metrics_baseline,
+                "metrics_delta": metrics_delta,
             })
+
         grpo_groups.append(group)
-        # ----------------------------------------------------------------------
+        # ---------------------------------------
 
-        # Existing selection logic for continuing the dialogue
-        # best reply by highest pass@k
-        # (we still use this to advance the conversation for future turns)
-        max_value = max([s.get(pass_k_key, 0.0) for s in pass_at_k_scores])
-        best_idx = [s.get(pass_k_key, 0.0) for s in pass_at_k_scores].index(max_value)
-        best_pass_at_k_score = pass_at_k_scores[best_idx]
+        # ---- Choose best by chosen pass@k on CURRENT (not delta) to roll convo forward
+        # (we want the dialogue itself to improve; policy learning can still use delta.)
+        best_values = [_get_score(s, pass_k) for s in pass_at_k_scores_current]
+        max_value = max(best_values)
+        best_idx = best_values.index(max_value)
+        best_pass_at_k_score = pass_at_k_scores_current[best_idx]
 
-        # Exploration vs exploitation to advance convo context
+        # ---- Exploration vs exploitation (propensity fix)
         if random.random() < 1 - eps:
             texts += [student_replies[best_idx], teacher_replies[best_idx]]
             propensity = 1 - eps
         else:
             non_best = [i for i in range(rlhf_samples) if i != best_idx]
-            idx = random.choice(non_best)
+            idx = random.choice(non_best) if non_best else best_idx
             texts += [student_replies[idx], teacher_replies[idx]]
-            propensity = eps / max(1, rlhf_samples - 1)
+            # probability mass spread over (K-1) non-best choices
+            propensity = eps / max(1, (rlhf_samples - 1))
 
-        # SFT/DPO collection (unchanged) — you may keep or remove if you only want GRPO
+        # SFT item
+        chosen = student_replies[best_idx]
+
+        # ---- SFT/DPO collection gated by quality (unchanged gate)
         if max_value >= 0.85:
-            chosen = student_replies[best_idx]
             chosen_list.append({
                 "prompt": prompt_messages,
                 "response": chosen,
@@ -226,36 +301,79 @@ def run_problem(
                 "propensity": propensity
             })
 
-            for score, reply in zip(pass_at_k_scores, student_replies):
-                if best_pass_at_k_score.get(pass_k_key, 0.0) - score.get(pass_k_key, 0.0) >= 0.05 and reply != chosen:
-                    pairs.append({
-                        "prompt": prompt_messages,
-                        "chosen_response": chosen,
-                        "rejected_response": reply,
-                        "chosen_reward": best_pass_at_k_score,
-                        "rejected_reward": score,
-                        "problem": evaluation_problem,
-                        "turn": turn
-                    })
+        # ---- DPO pair mining (now delta-aware and hard-negative friendly)
+        # Build list of candidates with margins vs best
+        deltas_for_pairs = []
+        for score_cur, reply in zip(pass_at_k_scores_current, student_replies):
+            if reply is chosen:
+                continue
+            best_val = _get_score(best_pass_at_k_score, pass_k)
+            cur_val = _get_score(score_cur, pass_k)
+            margin = best_val - cur_val
+            deltas_for_pairs.append((margin, reply, score_cur))
 
-        logger.debug(f'pid-{evaluation_problem["id"]} turn-{turn} pass@k={best_pass_at_k_score}')
+        # Filter by margin band
+        min_m = dpo_margin_min if dpo_margin_min is not None else 0.05  # previous behavior ~0.05
+        max_m = dpo_margin_max if dpo_margin_max is not None else 1.0
+        filtered = [(m, r, s) for (m, r, s) in deltas_for_pairs if (m >= min_m and m <= max_m)]
+
+        # If we cap pairs per turn, bias selection toward harder (smaller margin) examples
+        if dpo_max_pairs_per_turn is not None and len(filtered) > dpo_max_pairs_per_turn:
+            # sort by margin ascending (harder first)
+            filtered.sort(key=lambda x: x[0])
+            filtered = filtered[:dpo_max_pairs_per_turn]
+
+        # Save pairs
+        for margin, reply, score_cur in filtered:
+            # rewards for DPO: current or delta to stay consistent with GRPO
+            if use_delta_reward:
+                # need baseline for this reply
+                idx = student_replies.index(reply)
+                base_scores = pass_at_k_scores_baseline[idx]
+                chosen_reward_dict = {
+                    "current": best_pass_at_k_score,
+                    "baseline": pass_at_k_scores_baseline[best_idx] if use_delta_reward else {},
+                    "delta@pass_k": _get_score(best_pass_at_k_score, pass_k) - _get_score(pass_at_k_scores_baseline[best_idx], pass_k) if use_delta_reward else _get_score(best_pass_at_k_score, pass_k)
+                }
+                rejected_reward_dict = {
+                    "current": score_cur,
+                    "baseline": base_scores,
+                    "delta@pass_k": _get_score(score_cur, pass_k) - _get_score(base_scores, pass_k)
+                }
+            else:
+                chosen_reward_dict = best_pass_at_k_score
+                rejected_reward_dict = score_cur
+
+            pairs.append({
+                "prompt": prompt_messages,
+                "chosen_response": chosen,
+                "rejected_response": reply,
+                "chosen_reward": chosen_reward_dict,
+                "rejected_reward": rejected_reward_dict,
+                "problem": evaluation_problem,
+                "turn": turn
+            })
+
+        logger.debug(f'pid-{evaluation_problem["id"]} turn-{turn} best pass@{pass_k}={_get_score(best_pass_at_k_score, pass_k):.3f}')
 
     return (
         chosen_list,
         pairs,
-        grpo_groups,  # NEW
+        grpo_groups,
         total_teacher_prompt_tks,
         total_teacher_completion_tks,
         total_student_prompt_tks,
         total_student_completion_tks
     )
 
-
+# -------------------------
+# Hydra entry
+# -------------------------
 @hydra.main(version_base=None, config_path="../../configs", config_name="config.yaml")
 def main(cfg: DictConfig) -> None:
     start_time = time.perf_counter()  # ---- start timer ----
 
-    # set the OpenAI key env variable, HF HOME
+    # set envs
     set_envs(cfg.paths.openai_api_key_fpath, cfg.paths.hf_home)
 
     # Output files (SFT, DPO, GRPO)
@@ -265,11 +383,11 @@ def main(cfg: DictConfig) -> None:
         str(cfg.experiment.dataset),
         f"{cfg.student.model}_cot_sft_iter{cfg.gen.dagger_iter}_{cfg.data.split}.jsonl" if cfg.experiment.cot else f"{cfg.student.model}_sft_iter{cfg.gen.dagger_iter}_{cfg.data.split}.jsonl"
     )
-    fpath_rlhf = os.path.join(
+    fpath_dpo = os.path.join(
         str(cfg.paths.data),
         str(cfg.teacher.model),
         str(cfg.experiment.dataset),
-        f"{cfg.student.model}_cot_rlhf_iter{cfg.gen.dagger_iter}_{cfg.data.split}.jsonl" if cfg.experiment.cot else f"{cfg.student.model}_rlhf_iter{cfg.gen.dagger_iter}_{cfg.data.split}.jsonl"
+        f"{cfg.student.model}_cot_dpo_iter{cfg.gen.dagger_iter}_{cfg.data.split}.jsonl" if cfg.experiment.cot else f"{cfg.student.model}_dpo_iter{cfg.gen.dagger_iter}_{cfg.data.split}.jsonl"
     )
     fpath_grpo = os.path.join(
         str(cfg.paths.data),
@@ -279,9 +397,9 @@ def main(cfg: DictConfig) -> None:
     )
 
     existing_pids = set()
-    count_rlhf, count_sft, count_grpo = 0, 0, 0
+    count_dpo, count_sft, count_grpo = 0, 0, 0
 
-    # Resume dedupe by dagger_iter for SFT/DPO (unchanged)
+    # Resume dedupe by dagger_iter for SFT/DPO
     if os.path.exists(fpath_sft):
         with open(fpath_sft, "r") as f:
             for line in f:
@@ -290,8 +408,8 @@ def main(cfg: DictConfig) -> None:
                     existing_pids.add(ex["problem"]["id"])
         logger.info(f"Loaded {len(existing_pids)} existing SFT-{cfg.gen.dagger_iter} examples from {fpath_sft}")
 
-    if os.path.exists(fpath_rlhf):
-        with open(fpath_rlhf, "r") as f:
+    if os.path.exists(fpath_dpo):
+        with open(fpath_dpo, "r") as f:
             for line in f:
                 ex = json.loads(line)
                 if ex.get("dagger_iter") == cfg.gen.dagger_iter:
@@ -302,6 +420,7 @@ def main(cfg: DictConfig) -> None:
         str(cfg.paths.data),
         str(cfg.teacher.model),
         str(cfg.experiment.dataset),
+        f"splits_{cfg.gen.pass_at_k_threshold}",
         f"{cfg.student.model}_{cfg.data.split}.json",
     )
     logger.info(f"Loading interaction problems: {problems_fpath}")
@@ -318,6 +437,7 @@ def main(cfg: DictConfig) -> None:
             str(cfg.paths.data),
             str(cfg.teacher.model),
             str(cfg.experiment.dataset),
+            f"splits_{cfg.gen.pass_at_k_threshold}",
             f"{cfg.student.model}_ood_{cfg.data.split}.json",
         )
         logger.info(f"Loading evaluation (OOD) problems: {ood_problems_path}")
@@ -327,7 +447,7 @@ def main(cfg: DictConfig) -> None:
         ][: cfg.data.data_amount]
         logger.info(f"Total evaluation (OOD) problems: {len(evaluation_problems)}")
 
-    # Build teacher and student clients
+    # Clients
     teacher_name, student_name = cfg.teacher.model, cfg.student.model
     teacher_client = build_client(teacher_name, cfg.teacher.gpus, cfg.teacher.server)
     student_client = build_client(student_name, cfg.student.gpus, cfg.student.server)
@@ -336,12 +456,20 @@ def main(cfg: DictConfig) -> None:
     total_teacher_prompt_tks = total_teacher_completion_tks = 0
     total_student_prompt_tks = total_student_completion_tks = 0
 
-    # Open files
-    f_rlhf = open(fpath_rlhf, "a" if os.path.exists(fpath_rlhf) else "w")
+    # Files
+    f_dpo = open(fpath_dpo, "a" if os.path.exists(fpath_dpo) else "w")
     f_sft = open(fpath_sft, "a" if os.path.exists(fpath_sft) else "w")
     f_grpo = open(fpath_grpo, "a" if os.path.exists(fpath_grpo) else "w")
 
-    # Build everything in parallel
+    # NEW knobs from cfg (with defaults)
+    use_delta_reward = bool(getattr(cfg.gen, "use_delta_reward", False))
+    dpo_margin_min = float(getattr(cfg.gen, "dpo_margin_min", 0.01))
+    dpo_margin_max = float(getattr(cfg.gen, "dpo_margin_max", 1.0))
+    dpo_max_pairs_per_turn = getattr(cfg.gen, "dpo_max_pairs_per_turn", None)
+    if dpo_max_pairs_per_turn is not None:
+        dpo_max_pairs_per_turn = int(dpo_max_pairs_per_turn)
+
+    # Parallel run
     with ThreadPoolExecutor(max_workers=cfg.experiment.num_workers) as executor:
         futures = []
         for interaction_problem, evaluation_problem in zip(interaction_problems, evaluation_problems):
@@ -365,33 +493,37 @@ def main(cfg: DictConfig) -> None:
                 cfg.experiment.total_turns,
                 cfg.gen.eps,
                 cfg.experiment.cot,
-                cfg.experiment.ood
+                cfg.experiment.ood,
+                use_delta_reward,
+                dpo_margin_min,
+                dpo_margin_max,
+                dpo_max_pairs_per_turn,
             ))
 
         for future in tqdm(as_completed(futures), total=len(futures), desc="Processing problems"):
             (
                 chosen,
                 pairs,
-                grpo_groups,  # NEW
+                grpo_groups,
                 teacher_prompt_tks,
                 teacher_completion_tks,
                 student_prompt_tks,
                 student_completion_tks
             ) = future.result()
 
-            # Save RLHF jsonl (pairs) incrementally (unchanged)
+            # Save DPO
             for ex in pairs:
                 ex["dagger_iter"] = cfg.gen.dagger_iter
-                f_rlhf.write(json.dumps(ex, ensure_ascii=False) + "\n")
-            count_rlhf += len(pairs)
+                f_dpo.write(json.dumps(ex, ensure_ascii=False) + "\n")
+            count_dpo += len(pairs)
 
-            # Save SFT jsonl incrementally (unchanged)
+            # Save SFT
             for ex in chosen:
                 ex["dagger_iter"] = cfg.gen.dagger_iter
                 f_sft.write(json.dumps(ex, ensure_ascii=False) + "\n")
             count_sft += len(chosen)
 
-            # Save GRPO groups incrementally (NEW)
+            # Save GRPO
             for group in grpo_groups:
                 group["dagger_iter"] = cfg.gen.dagger_iter
                 f_grpo.write(json.dumps(group, ensure_ascii=False) + "\n")
@@ -404,13 +536,13 @@ def main(cfg: DictConfig) -> None:
             total_student_completion_tks += student_completion_tks
 
     # Close files
-    f_rlhf.close()
+    f_dpo.close()
     f_sft.close()
     f_grpo.close()
 
     # Log summary
     logger.info(f"------- {cfg.data.split} -------")
-    logger.info(f"Saved {count_rlhf} preference pairs to {fpath_rlhf}")
+    logger.info(f"Saved {count_dpo} preference pairs to {fpath_dpo}")
     logger.info(f"Saved {count_sft} SFT examples to {fpath_sft}")
     logger.info(f"Saved {count_grpo} GRPO groups to {fpath_grpo}")
     logger.info(
