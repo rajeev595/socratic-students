@@ -380,13 +380,13 @@ def main(cfg: DictConfig) -> None:
         str(cfg.paths.data),
         str(cfg.teacher.model),
         str(cfg.experiment.dataset),
-        f"{cfg.student.model}_cot_rlhf_iter{cfg.gen.dagger_iter}_train.jsonl" if cfg.experiment.cot else f"{cfg.student.model}_rlhf_iter{cfg.gen.dagger_iter}_train.jsonl"
+        f"{cfg.student.model}_cot_dpo_iter{cfg.gen.dagger_iter}_train.jsonl" if cfg.experiment.cot else f"{cfg.student.model}_dpo_iter{cfg.gen.dagger_iter}_train.jsonl"
     )
     val_fpath_dpo = os.path.join(
         str(cfg.paths.data),
         str(cfg.teacher.model),
         str(cfg.experiment.dataset),
-        f"{cfg.student.model}_cot_rlhf_iter{cfg.gen.dagger_iter}_val.jsonl" if cfg.experiment.cot else f"{cfg.student.model}_rlhf_iter{cfg.gen.dagger_iter}_val.jsonl"
+        f"{cfg.student.model}_cot_dpo_iter{cfg.gen.dagger_iter}_val.jsonl" if cfg.experiment.cot else f"{cfg.student.model}_dpo_iter{cfg.gen.dagger_iter}_val.jsonl"
     )
 
     ckpt_dir_sft = os.path.join(
@@ -436,11 +436,11 @@ def main(cfg: DictConfig) -> None:
         lora_r=cfg.train.lora_r,
         lora_alpha=cfg.train.lora_alpha,
         lora_dropout=cfg.train.lora_dropout,
-        batch_size=cfg.train.rlhf_batch_size,
+        batch_size=cfg.train.dpo_batch_size,
         grad_accum=cfg.train.grad_accum,
-        lr=cfg.train.rlhf_lr,
+        lr=cfg.train.dpo_lr,
         beta=cfg.train.beta,
-        epochs=cfg.train.rlhf_epochs
+        epochs=cfg.train.dpo_epochs
     )
 
     elapsed = time.perf_counter() - start_time

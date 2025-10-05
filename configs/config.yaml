@@ -1,8 +1,8 @@
 paths:
   openai_api_key_fpath: /home/ambati/.openai_api_key.zshrc      # path to OpenAI API key
-  data: /playpen-hdd/ambati/interact_plus/data/                 # path to data
-  experiments: /playpen-hdd/ambati/interact_plus/experiments/   # path to save experiment results
-  hf_home: /playpen-hdd/shared/pretrained_models/               # Hugging Face cache dir
+  data: /playpen-ssd2/ambati/interact_plus/data/                # path to data
+  experiments: /playpen-ssd2/ambati/interact_plus/experiments/  # path to save experiment results
+  hf_home: /playpen-ssd2/pretrained_models/                     # Hugging Face cache dir
 
 # Model
 teacher:
@@ -41,6 +41,11 @@ gen:
   retry_on_fail: 5
   take_every: 1                 # only used for math dataset
   dagger_iter: 0                # DAgger iteration
+  use_delta_reward: true        # counterfactual reward = current - baseline
+  dpo_margin_min: 0.01          # include near-ties (>= 0.01)
+  dpo_margin_max: 0.50          # cap too-easy negatives (<= 0.50)
+  dpo_max_pairs_per_turn:       # optional per-turn cap; remove or set null to disable
+
 
 # Direct Preference Optimization (DPO) settings
 train:
@@ -52,15 +57,15 @@ train:
   lora_alpha: 32
   lora_dropout: 0.05
   sft_batch_size: 4
-  rlhf_batch_size: 2
-  grpo_batch_size_groups: 2
+  dpo_batch_size: 2
+  grpo_batch_size_groups: 1
   grad_accum: 8
   sft_lr: 1e-4
-  rlhf_lr: 1e-5
+  dpo_lr: 1e-5
   grpo_lr: 5e-6  
   beta: 0.2
   sft_epochs: 5
-  rlhf_epochs: 5
+  dpo_epochs: 5
   grpo_epochs: 2
   grpo_tau: 0.7
   grpo_reward_norm: "zscore"
@@ -76,7 +81,7 @@ experiment:
   assessment_turn: -1   # -1 (none), 1 (pre), 5 (mid)
   start_from_turn: 1    # 1 (new), odd (student), even (teacher)
   total_turns: 11
-  num_workers: 32
+  num_workers: 16
 
 hydra:
   run:
