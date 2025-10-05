@@ -469,71 +469,75 @@ def main(cfg: DictConfig) -> None:
     if dpo_max_pairs_per_turn is not None:
         dpo_max_pairs_per_turn = int(dpo_max_pairs_per_turn)
 
-    # Parallel run
-    with ThreadPoolExecutor(max_workers=cfg.experiment.num_workers) as executor:
-        futures = []
-        for interaction_problem, evaluation_problem in zip(interaction_problems, evaluation_problems):
-            futures.append(executor.submit(
-                run_problem,
-                cfg.data.type,
-                teacher_client,
-                teacher_name,
-                cfg.teacher.temperature,
-                student_client,
-                student_name,
-                cfg.student.temperature,
-                interaction_problem,
-                evaluation_problem,
-                cfg.gen.k_values,
-                cfg.gen.pass_k,
-                cfg.gen.num_samples,
-                cfg.gen.rlhf_samples,
-                cfg.experiment.assessment_turn,
-                cfg.experiment.start_from_turn,
-                cfg.experiment.total_turns,
-                cfg.gen.eps,
-                cfg.experiment.cot,
-                cfg.experiment.ood,
-                use_delta_reward,
-                dpo_margin_min,
-                dpo_margin_max,
-                dpo_max_pairs_per_turn,
-            ))
+    for i in range(0, len(interaction_problems), cfg.experiment.chunk_size):
+        interaction_problems_chunk = interaction_problems[i: i + cfg.experiment.chunk_size]
+        evaluation_problems_chunk = evaluation_problems[i: i + cfg.experiment.chunk_size]
 
-        for future in tqdm(as_completed(futures), total=len(futures), desc="Processing problems"):
-            (
-                chosen,
-                pairs,
-                grpo_groups,
-                teacher_prompt_tks,
-                teacher_completion_tks,
-                student_prompt_tks,
-                student_completion_tks
-            ) = future.result()
+        # Parallel run
+        with ThreadPoolExecutor(max_workers=cfg.experiment.num_workers) as executor:
+            futures = []
+            for interaction_problem, evaluation_problem in zip(interaction_problems_chunk, evaluation_problems_chunk):
+                futures.append(executor.submit(
+                    run_problem,
+                    cfg.data.type,
+                    teacher_client,
+                    teacher_name,
+                    cfg.teacher.temperature,
+                    student_client,
+                    student_name,
+                    cfg.student.temperature,
+                    interaction_problem,
+                    evaluation_problem,
+                    cfg.gen.k_values,
+                    cfg.gen.pass_k,
+                    cfg.gen.num_samples,
+                    cfg.gen.rlhf_samples,
+                    cfg.experiment.assessment_turn,
+                    cfg.experiment.start_from_turn,
+                    cfg.experiment.total_turns,
+                    cfg.gen.eps,
+                    cfg.experiment.cot,
+                    cfg.experiment.ood,
+                    use_delta_reward,
+                    dpo_margin_min,
+                    dpo_margin_max,
+                    dpo_max_pairs_per_turn,
+                ))
 
-            # Save DPO
-            for ex in pairs:
-                ex["dagger_iter"] = cfg.gen.dagger_iter
-                f_dpo.write(json.dumps(ex, ensure_ascii=False) + "\n")
-            count_dpo += len(pairs)
+            for future in tqdm(as_completed(futures), total=len(futures), desc="Processing problems"):
+                (
+                    chosen,
+                    pairs,
+                    grpo_groups,
+                    teacher_prompt_tks,
+                    teacher_completion_tks,
+                    student_prompt_tks,
+                    student_completion_tks
+                ) = future.result()
 
-            # Save SFT
-            for ex in chosen:
-                ex["dagger_iter"] = cfg.gen.dagger_iter
-                f_sft.write(json.dumps(ex, ensure_ascii=False) + "\n")
-            count_sft += len(chosen)
+                # Save DPO
+                for ex in pairs:
+                    ex["dagger_iter"] = cfg.gen.dagger_iter
+                    f_dpo.write(json.dumps(ex, ensure_ascii=False) + "\n")
+                count_dpo += len(pairs)
 
-            # Save GRPO
-            for group in grpo_groups:
-                group["dagger_iter"] = cfg.gen.dagger_iter
-                f_grpo.write(json.dumps(group, ensure_ascii=False) + "\n")
-            count_grpo += len(grpo_groups)
+                # Save SFT
+                for ex in chosen:
+                    ex["dagger_iter"] = cfg.gen.dagger_iter
+                    f_sft.write(json.dumps(ex, ensure_ascii=False) + "\n")
+                count_sft += len(chosen)
 
-            # Token usage
-            total_teacher_prompt_tks += teacher_prompt_tks
-            total_teacher_completion_tks += teacher_completion_tks
-            total_student_prompt_tks += student_prompt_tks
-            total_student_completion_tks += student_completion_tks
+                # Save GRPO
+                for group in grpo_groups:
+                    group["dagger_iter"] = cfg.gen.dagger_iter
+                    f_grpo.write(json.dumps(group, ensure_ascii=False) + "\n")
+                count_grpo += len(grpo_groups)
+
+                # Token usage
+                total_teacher_prompt_tks += teacher_prompt_tks
+                total_teacher_completion_tks += teacher_completion_tks
+                total_student_prompt_tks += student_prompt_tks
+                total_student_completion_tks += student_completion_tks
 
     # Close files
     f_dpo.close()

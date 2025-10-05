@@ -303,60 +303,64 @@ def main(cfg: DictConfig) -> None:
     f_rlhf = open(fpath_rlhf, "a" if os.path.exists(fpath_rlhf) else "w")
     f_sft = open(fpath_sft, "a" if os.path.exists(fpath_sft) else "w")
 
-    # Build pairs
-    with ThreadPoolExecutor(max_workers=cfg.experiment.num_workers) as executor:
-        # collect all the jobs
-        futures = []
-        for interaction_problem, evaluation_problem in zip(interaction_problems, evaluation_problems):
-            futures.append(executor.submit(
-                run_problem,
-                cfg.data.type,
-                teacher_client,
-                teacher_name,
-                cfg.teacher.temperature,
-                student_client,
-                student_name,
-                cfg.student.temperature,
-                interaction_problem,
-                evaluation_problem,
-                cfg.gen.k_values,
-                cfg.gen.pass_k,
-                cfg.gen.num_samples,
-                cfg.gen.rlhf_samples,
-                cfg.experiment.assessment_turn,
-                cfg.experiment.start_from_turn,
-                cfg.experiment.total_turns,
-                cfg.gen.eps,
-                cfg.experiment.cot,
-                cfg.experiment.ood
-            ))
+    for i in range(0, len(interaction_problems), cfg.experiment.chunk_size):
+        interaction_problems_chunk = interaction_problems[i: i + cfg.experiment.chunk_size]
+        evaluation_problems_chunk = evaluation_problems[i: i + cfg.experiment.chunk_size]
 
-        for future in tqdm(as_completed(futures), total=len(futures), desc="Processing problems"):
-            (
-                chosen,
-                pairs,
-                teacher_prompt_tks, 
-                teacher_completion_tks, 
-                student_prompt_tks, 
-                student_completion_tks
-            ) = future.result()
+        # Build pairs
+        with ThreadPoolExecutor(max_workers=cfg.experiment.num_workers) as executor:
+            # collect all the jobs
+            futures = []
+            for interaction_problem, evaluation_problem in zip(interaction_problems_chunk, evaluation_problems_chunk):
+                futures.append(executor.submit(
+                    run_problem,
+                    cfg.data.type,
+                    teacher_client,
+                    teacher_name,
+                    cfg.teacher.temperature,
+                    student_client,
+                    student_name,
+                    cfg.student.temperature,
+                    interaction_problem,
+                    evaluation_problem,
+                    cfg.gen.k_values,
+                    cfg.gen.pass_k,
+                    cfg.gen.num_samples,
+                    cfg.gen.rlhf_samples,
+                    cfg.experiment.assessment_turn,
+                    cfg.experiment.start_from_turn,
+                    cfg.experiment.total_turns,
+                    cfg.gen.eps,
+                    cfg.experiment.cot,
+                    cfg.experiment.ood
+                ))
 
-            # Save RLHF jsonl (or json) incrementally
-            count_rlhf += len(pairs)
-            for ex in pairs:
-                ex["dagger_iter"] = cfg.gen.dagger_iter
-                f_rlhf.write(json.dumps(ex, ensure_ascii=False) + "\n")
+            for future in tqdm(as_completed(futures), total=len(futures), desc="Processing problems"):
+                (
+                    chosen,
+                    pairs,
+                    teacher_prompt_tks, 
+                    teacher_completion_tks, 
+                    student_prompt_tks, 
+                    student_completion_tks
+                ) = future.result()
 
-            # Save SFT jsonl (or json) incrementally
-            count_sft += len(chosen)
-            for ex in chosen:
-                ex["dagger_iter"] = cfg.gen.dagger_iter
-                f_sft.write(json.dumps(ex, ensure_ascii=False) + "\n")
+                # Save RLHF jsonl (or json) incrementally
+                count_rlhf += len(pairs)
+                for ex in pairs:
+                    ex["dagger_iter"] = cfg.gen.dagger_iter
+                    f_rlhf.write(json.dumps(ex, ensure_ascii=False) + "\n")
 
-            total_teacher_prompt_tks += teacher_prompt_tks
-            total_teacher_completion_tks += teacher_completion_tks
-            total_student_prompt_tks += student_prompt_tks
-            total_student_completion_tks += student_completion_tks
+                # Save SFT jsonl (or json) incrementally
+                count_sft += len(chosen)
+                for ex in chosen:
+                    ex["dagger_iter"] = cfg.gen.dagger_iter
+                    f_sft.write(json.dumps(ex, ensure_ascii=False) + "\n")
+
+                total_teacher_prompt_tks += teacher_prompt_tks
+                total_teacher_completion_tks += teacher_completion_tks
+                total_student_prompt_tks += student_prompt_tks
+                total_student_completion_tks += student_completion_tks
 
     # Close files
     f_rlhf.close()
