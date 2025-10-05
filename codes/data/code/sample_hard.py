@@ -377,7 +377,7 @@ def save_train_test_val_split(
     num_val = int(val_size * total_num)
 
     # Save train examples
-    train_fpath = os.path.join(dir, f"{name}_train.json")
+    train_fpath = os.path.join(dir, f"splits_{pass_at_k_threshold}", f"{name}_train.json")
     save_json_atomic(
         path=train_fpath,
         obj=hard[: num_train],
@@ -386,7 +386,7 @@ def save_train_test_val_split(
     logger.info("Train-split: %d problems at %s", num_train, train_fpath)
 
     # Save val examples
-    val_fpath = os.path.join(dir, f"{name}_val.json")
+    val_fpath = os.path.join(dir, f"splits_{pass_at_k_threshold}", f"{name}_val.json")
     save_json_atomic(
         path=val_fpath,
         obj=hard[num_train: num_train + num_val],
@@ -395,7 +395,7 @@ def save_train_test_val_split(
     logger.info("Val-split: %d problems at %s", num_val, val_fpath)
 
     # Save test examples
-    test_fpath = os.path.join(dir, f"{name}_test.json")
+    test_fpath = os.path.join(dir, f"splits_{pass_at_k_threshold}", f"{name}_test.json")
     save_json_atomic(
         path=test_fpath,
         obj=hard[num_train + num_val: ],
@@ -452,6 +452,9 @@ def main(cfg: DictConfig) -> None:
     teacher_blacklist: Set[int] = set()
     student_ids: Set[int] = set()
 
+    # No. of examples with higher pass@k rate
+    num_passk_examples = 0
+
     if os.path.exists(output_fpath):
         data = load_json_resilient(output_fpath)
 
@@ -462,6 +465,14 @@ def main(cfg: DictConfig) -> None:
             "Resuming from %d problems in %s | teacher_blacklist=%d, student_processed=%d",
             len(collected), output_fpath, len(teacher_blacklist), len(student_ids)
         )
+
+        for ex in collected:
+            try:
+                if ex["scores"][cfg.gen.pass_k] < cfg.gen.pass_at_k_threshold:
+                    num_passk_examples += 1
+            except:
+                if ex["scores"][str(cfg.gen.pass_k)] < cfg.gen.pass_at_k_threshold:
+                    num_passk_examples += 1
 
     # Load datasets (HE test split; OPC sample)
     datasets = []
@@ -524,6 +535,8 @@ def main(cfg: DictConfig) -> None:
 
             total_prompt_tks += p_tks
             total_completion_tks += c_tks
+            if scores[cfg.gen.pass_k] < cfg.gen.pass_at_k_threshold:
+                num_passk_examples += 1
 
             # Save every 100 examples
             if len(collected) > 0 and len(collected) % 100 == 0:
@@ -538,7 +551,7 @@ def main(cfg: DictConfig) -> None:
                 )
                 logger.info("Collected %d/%d samples!", len(collected), cfg.data.data_amount)
 
-            if len(collected) >= cfg.data.data_amount:
+            if num_passk_examples >= cfg.data.data_amount:
                 # Cancel pending futures
                 for fut in future_to_pid:
                     fut.cancel()
