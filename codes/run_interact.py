@@ -454,68 +454,63 @@ def main(cfg: DictConfig) -> None:
     total_teacher_prompt_tks = total_teacher_completion_tks = 0
     total_student_prompt_tks = total_student_completion_tks = 0
 
-    # Parallel execution
-    with ThreadPoolExecutor(max_workers=cfg.experiment.num_workers) as executor:
-        future_to_pid = {executor.submit(
-            run_problem,
-            cfg.data.type,
-            transcripts_dir,
-            teacher_client,
-            teacher_name,
-            cfg.teacher.temperature,
-            student_client,
-            student_name,
-            cfg.student.temperature,
-            ip,
-            ep,
-            k_values,
-            num_samples,
-            assessment_turn,
-            start_from_turn,
-            total_turns,
-            use_cot,
-            cfg.experiment.ood
-        ): ip["id"] for (ip, ep) in zip(interaction_problems, evaluation_problems)}
+    for i in range(0, len(interaction_problems), cfg.experiment.chunk_size):
+        interaction_problems_chunk = interaction_problems[i: i + cfg.experiment.chunk_size]
+        evaluation_problems_chunk = evaluation_problems[i: i + cfg.experiment.chunk_size]
 
-        for future in tqdm(as_completed(future_to_pid), total=len(future_to_pid), desc="Running interact"):
-            (
-                generations,
-                results,
-                teacher_prompt_tks,
-                teacher_completion_tks,
-                student_prompt_tks,
-                student_completion_tks,
-            ) = future.result()
+        # Parallel execution
+        with ThreadPoolExecutor(max_workers=cfg.experiment.num_workers) as executor:
+            future_to_pid = {executor.submit(
+                run_problem,
+                cfg.data.type,
+                transcripts_dir,
+                teacher_client,
+                teacher_name,
+                cfg.teacher.temperature,
+                student_client,
+                student_name,
+                cfg.student.temperature,
+                ip,
+                ep,
+                k_values,
+                num_samples,
+                assessment_turn,
+                start_from_turn,
+                total_turns,
+                use_cot,
+                cfg.experiment.ood
+            ): ip["id"] for (ip, ep) in zip(interaction_problems_chunk, evaluation_problems_chunk)}
 
-            # Update aggregates
-            pid = future_to_pid[future]
-            for turn, res_list in results.items():
-                turn_results[turn].append(res_list)
+            for future in tqdm(as_completed(future_to_pid), total=len(future_to_pid), desc="Running interact"):
+                (
+                    generations,
+                    results,
+                    teacher_prompt_tks,
+                    teacher_completion_tks,
+                    student_prompt_tks,
+                    student_completion_tks,
+                ) = future.result()
 
-            all_results[pid] = {
-                "results": results,
-                "generations": generations
-            }
+                # Update aggregates
+                pid = future_to_pid[future]
+                for turn, res_list in results.items():
+                    turn_results[turn].append(res_list)
 
-            total_teacher_prompt_tks += teacher_prompt_tks
-            total_teacher_completion_tks += teacher_completion_tks
-            total_student_prompt_tks += student_prompt_tks
-            total_student_completion_tks += student_completion_tks
+                all_results[pid] = {
+                    "results": results,
+                    "generations": generations
+                }
 
-            # Safe save results every few examples
-            if len(all_results) % 50 == 0:
-                # compute bootstrapped aggregate results
-                avg_results = bootstrap_aggregate(all_results)
+                total_teacher_prompt_tks += teacher_prompt_tks
+                total_teacher_completion_tks += teacher_completion_tks
+                total_student_prompt_tks += student_prompt_tks
+                total_student_completion_tks += student_completion_tks
 
-                # Save per-problem statistics and aggregate
-                save_json_atomic(results_fpath, all_results)
-                save_json_atomic(os.path.join(exp_dir, "aggregate_results.json"), avg_results)
+        # Save per-problem statistics and aggregate
+        save_json_atomic(results_fpath, all_results)
 
     # compute bootstrapped aggregate results
     avg_results = bootstrap_aggregate(all_results)
-
-    # Save per-problem statistics and aggregate
-    save_json_atomic(results_fpath, all_results)
     save_json_atomic(os.path.join(exp_dir, "aggregate_results.json"), avg_results)
 
     # Log aggregate summary
