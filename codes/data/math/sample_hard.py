@@ -220,6 +220,9 @@ def main(cfg: DictConfig) -> None:
     teacher_blacklist: Set[int] = set()
     student_ids: Set[int] = set()
 
+    # No. of examples with higher pass@k rate
+    num_passk_examples = 0
+
     # Resume from prior run if file exists (supports legacy list-only format)
     if os.path.exists(output_fpath):
         data = load_json_resilient(output_fpath)
@@ -232,88 +235,94 @@ def main(cfg: DictConfig) -> None:
             len(collected), len(teacher_blacklist), len(student_ids), output_fpath
         )
 
+        for ex in collected:
+            try:
+                if ex["scores"][cfg.gen.pass_k] < cfg.gen.pass_at_k_threshold:
+                    num_passk_examples += 1
+            except:
+                if ex["scores"][str(cfg.gen.pass_k)] < cfg.gen.pass_at_k_threshold:
+                    num_passk_examples += 1
+
     # Dataset (GSM-like). Adjust split/name as needed.
     gsm_ds = load_dataset("openai/gsm8k", "main", split="train")
     if "id" not in gsm_ds.column_names:
         gsm_ds = gsm_ds.add_column("id", [str(i) for i in range(len(gsm_ds))])
 
-    total_prompt_tks = 0
-    total_completion_tks = 0
-    # Parallel execution
-    with ThreadPoolExecutor(max_workers=cfg.experiment.num_workers) as executor:
-        future_to_pid = {}
-        for idx, row in enumerate(gsm_ds):
-            # Optionally subsample rows (e.g., take every Nth example)
-            if int(cfg.gen.take_every) > 1 and (idx % int(cfg.gen.take_every)) != 0:
-                continue
+    # total prompt and completion tokens
+    total_prompt_tks, total_completion_tks = 0, 0
 
-            problem = organize_gsm_row(row)
+    # Collect all problems
+    problems = []
+    for idx, row in enumerate(gsm_ds):
+        # Optionally subsample rows (e.g., take every Nth example)
+        if int(cfg.gen.take_every) > 1 and (idx % int(cfg.gen.take_every)) != 0:
+            continue
 
-            # Skip already seen or blacklisted IDs
-            if problem["id"] in student_ids or problem["id"] in teacher_blacklist:
-                continue
+        problem = organize_gsm_row(row)
 
-            future_to_pid[
-                executor.submit(
-                    process_problem,
-                    problem,
-                    teacher_client,
-                    teacher_name,
-                    float(cfg.teacher.temperature),
-                    student_client,
-                    student_name,
-                    float(cfg.student.temperature),
-                    list(cfg.gen.k_values),
-                    int(cfg.gen.num_samples)
-                )
-            ] = problem
+        # Skip already seen or blacklisted IDs
+        if problem["id"] in student_ids or problem["id"] in teacher_blacklist:
+            continue
 
-        for future in tqdm(as_completed(future_to_pid), total=len(future_to_pid), desc="Curating"):
-            result, scores, p_tks, c_tks = future.result()
-            problem = future_to_pid[future]
+        problems.append(problem)
 
-            if result == GOOD_PROBLEM:
-                collected.append({"problem": problem, "scores": scores})
-                student_ids.add(problem["id"])
+    for i in range(0, len(problems), cfg.experiment.chunk_size):
+        problems_chunk = problems[i: i + cfg.experiment.chunk_size]
 
-            elif result == TEACHER_BLACKLIST:
-                teacher_blacklist.add(problem["id"])
+        # Parallel execution
+        with ThreadPoolExecutor(max_workers=cfg.experiment.num_workers) as executor:
+            future_to_pid = {}
+            for problem in problems_chunk:
+                future_to_pid[
+                    executor.submit(
+                        process_problem,
+                        problem,
+                        teacher_client,
+                        teacher_name,
+                        float(cfg.teacher.temperature),
+                        student_client,
+                        student_name,
+                        float(cfg.student.temperature),
+                        list(cfg.gen.k_values),
+                        int(cfg.gen.num_samples)
+                    )
+                ] = problem
 
-            total_prompt_tks += p_tks
-            total_completion_tks += c_tks
+            for future in tqdm(as_completed(future_to_pid), total=len(future_to_pid), desc="Curating"):
+                result, scores, p_tks, c_tks = future.result()
+                problem = future_to_pid[future]
 
-            # Save every 100 examples
-            if len(collected) > 0 and len(collected) % 100 == 0:
-                save_json_atomic(
-                    output_fpath, 
-                    {
-                        "collected": collected,
-                        "teacher_blacklist": list(teacher_blacklist),
-                        "student_ids": list(student_ids)
-                    },
-                    indent=2
-                )
-                logger.info("Collected %d/%d samples!", len(collected), cfg.data.data_amount)
+                if result == GOOD_PROBLEM:
+                    collected.append({"problem": problem, "scores": scores})
+                    student_ids.add(problem["id"])
+                    try:
+                        if scores[cfg.gen.pass_k] < cfg.gen.pass_at_k_threshold:
+                            num_passk_examples += 1
+                    except:
+                        if scores[str(cfg.gen.pass_k)] < cfg.gen.pass_at_k_threshold:
+                            num_passk_examples += 1
 
-            if len(collected) >= cfg.data.data_amount:
-                # Cancel pending futures
-                for fut in future_to_pid:
-                    fut.cancel()
-                executor.shutdown(cancel_futures=True)
-                break
+                elif result == TEACHER_BLACKLIST:
+                    teacher_blacklist.add(problem["id"])
 
-    # Final save
-    save_json_atomic(
-        output_fpath, 
-        {
-            "collected": collected,
-            "teacher_blacklist": list(teacher_blacklist),
-            "student_ids": list(student_ids)
-        },
-        indent=2
-    )
+                total_prompt_tks += p_tks
+                total_completion_tks += c_tks
 
-    logger.info("Saved %d problems to %s", len(collected), output_fpath)
+        save_json_atomic(
+            output_fpath, 
+            {
+                "collected": collected,
+                "teacher_blacklist": list(teacher_blacklist),
+                "student_ids": list(student_ids)
+            },
+            indent=2
+        )
+        logger.info("Collected examples total: %d passed: %d/%d samples!", len(collected), num_passk_examples, cfg.data.data_amount)
+
+        if num_passk_examples >= cfg.data.data_amount:
+            break
+
+    logger.info("Saved %d total problems to %s", len(collected), output_fpath)
     logger.info("Token usage (approx): prompt=%d, completion=%d", total_prompt_tks, total_completion_tks)
 
     # Count the no. of examples

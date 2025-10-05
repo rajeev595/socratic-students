@@ -557,12 +557,12 @@ def main(cfg: DictConfig) -> None:
             },
             indent=2
         )
-        logger.info("Collected %d/%d samples!", len(collected), cfg.data.data_amount)
+        logger.info("Collected examples total: %d passed: %d/%d samples!", len(collected), num_passk_examples, cfg.data.data_amount)
 
         if num_passk_examples >= cfg.data.data_amount:
             break
 
-    logger.info("Saved %d problems to %s", len(collected), output_fpath)
+    logger.info("Saved %d total problems to %s", len(collected), output_fpath)
     logger.info("Token usage (approx): prompt=%d, completion=%d", total_prompt_tks, total_completion_tks)
 
     # Count the no. of examples
