@@ -19,11 +19,12 @@ from openai import OpenAI
 from codes.utils.llm.server import build_client
 from codes.utils.llm.chat import chat_complete
 from codes.utils.vars import set_envs
-from codes.data.utils import remove_think_tags, msgs_to_string, format_messages, extract_question
+from codes.data.utils import remove_think_tags, msgs_to_string, format_messages
 from codes.prompts.utils import _select_sys_prompt, _problem_greeting
 from codes.evaluation.code import generate_code_completions, evaluate_code_completion, get_code_feedback_from_eval
 from codes.evaluation.math import generate_math_completions, evaluate_math_completion, get_math_feedback_from_eval
 from codes.evaluation.utils import compute_pass_at_k, bootstrap_aggregate
+from codes.utils.file_ops import save_json_atomic, load_json_resilient
 
 
 logger = logging.getLogger(__name__)
@@ -132,9 +133,6 @@ def interact(
         if ("<think>" in reply) or ("</think>" in reply):
             reply = remove_think_tags(reply)
 
-        if is_student and use_cot:
-            reply = extract_question(reply)
-
         replies.append(reply)
 
     return replies, p_tks, c_tks
@@ -182,7 +180,7 @@ def evaluate(
 
     # Evaluate completions in parallel
     flags: List[bool] = []
-    with ThreadPoolExecutor() as ex:
+    with ThreadPoolExecutor(max_workers=4) as ex:
         futures = [ex.submit(eval_func, comp, problem) for comp in completions]
         for fut in as_completed(futures):
             _, passed = fut.result()
@@ -234,12 +232,11 @@ def run_problem(
 
     if os.path.exists(transcript_fpath):
         logger.info(f"loading transcript from {transcript_fpath}")
-        with open(transcript_fpath, "r") as f:
-            data = json.load(f)
+        data = load_json_resilient(transcript_fpath)
 
         if len(data) == total_turns:
             texts = [ex["content"] for ex in data]
-            return texts, 0, 0, 0, 0
+            return texts, {}, 0, 0, 0, 0
 
     pass_at_k_scores = {}
     generations = {}
@@ -254,8 +251,7 @@ def run_problem(
     else:
         tpath = os.path.join(transcripts_dir, f"{pid}.json")
         if os.path.exists(tpath):
-            with open(tpath, "r") as f:
-                prev = json.load(f)
+            prev = load_json_resilient(tpath)
             texts = [m["content"] for m in prev][:start_from_turn]
             cur_start = start_from_turn
             logger.info(f"[{pid}] resumed at turn {cur_start} from {tpath}")
@@ -337,8 +333,7 @@ def run_problem(
         edited_msgs.append({"role": role, "turn": idx, "content": text})
 
     # Save transcript
-    with open(os.path.join(transcripts_dir, f"{pid}.json"), "w") as f:
-        json.dump(edited_msgs, f, indent=2)
+    save_json_atomic(os.path.join(transcripts_dir, f"{pid}.json"), edited_msgs)
 
     return (
         generations,
@@ -397,6 +392,7 @@ def main(cfg: DictConfig) -> None:
         str(cfg.student.model),
         dataset,
     )
+    os.makedirs(exp_dir, exist_ok=True)
     transcripts_dir = os.path.join(exp_dir, "transcripts")
     os.makedirs(transcripts_dir, exist_ok=True)
 
@@ -407,12 +403,10 @@ def main(cfg: DictConfig) -> None:
     # Load existing results
     results_fpath = os.path.join(exp_dir, "itemized_results.json")
     if os.path.exists(results_fpath):
-        with open(os.path.join(exp_dir, "itemized_results.json"), "r") as f:
-            all_results = json.load(f)
-
-            for _, example in all_results.items():
-                for turn, res_list in example["results"].items():
-                    turn_results[int(turn)].append({int(k): v for k, v in res_list.items()})
+        all_results = load_json_resilient(results_fpath)
+        for _, example in all_results.items():
+            for turn, res_list in example["results"].items():
+                turn_results[int(turn)].append({int(k): v for k, v in res_list.items()})
 
         logger.info(f"Loaded experiment results for {len(all_results)} problems from: {results_fpath}")
 
@@ -421,11 +415,11 @@ def main(cfg: DictConfig) -> None:
         str(cfg.paths.data),
         str(cfg.teacher.model),
         dataset,
+        f"splits_{cfg.gen.pass_at_k_threshold}",
         f"{cfg.student.model}_test.json",
     )
     logger.info(f"Loading interaction problems: {problems_fpath}")
-    with open(problems_fpath, "r") as f:
-        interaction_problems: List[Dict[str, Any]] = json.load(f)
+    interaction_problems: List[Dict[str, Any]] = load_json_resilient(problems_fpath)
     interaction_problems = interaction_problems[len(all_results): cfg.data.data_amount]
     logger.info(f"Total interaction problems: {len(interaction_problems)}")
 
@@ -440,8 +434,7 @@ def main(cfg: DictConfig) -> None:
         )
 
         logger.info(f"Loading evaluation (OOD) problems: {ood_problems_path}")
-        with open(ood_problems_path, "r") as f:
-            evaluation_problems = json.load(f)
+        evaluation_problems = load_json_resilient(ood_problems_path)
         evaluation_problems = evaluation_problems[len(all_results): cfg.data.data_amount]
         logger.info(f"Total evaluation (OOD) problems: {len(evaluation_problems)}")
 
@@ -506,15 +499,21 @@ def main(cfg: DictConfig) -> None:
             total_student_prompt_tks += student_prompt_tks
             total_student_completion_tks += student_completion_tks
 
+            # Safe save results every few examples
+            if len(all_results) % 50 == 0:
+                # compute bootstrapped aggregate results
+                avg_results = bootstrap_aggregate(all_results)
+
+                # Save per-problem statistics and aggregate
+                save_json_atomic(results_fpath, all_results)
+                save_json_atomic(os.path.join(exp_dir, "aggregate_results.json"), avg_results)
+
     # compute bootstrapped aggregate results
     avg_results = bootstrap_aggregate(all_results)
 
     # Save per-problem statistics and aggregate
-    os.makedirs(exp_dir, exist_ok=True)
-    with open(os.path.join(exp_dir, "itemized_results.json"), "w") as f:
-        json.dump(all_results, f, indent=2)
-    with open(os.path.join(exp_dir, "aggregate_results.json"), "w") as f:
-        json.dump(avg_results, f, indent=2)
+    save_json_atomic(results_fpath, all_results)
+    save_json_atomic(os.path.join(exp_dir, "aggregate_results.json"), avg_results)
 
     # Log aggregate summary
     for turn in sorted(avg_results.keys()):
