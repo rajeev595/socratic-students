@@ -419,8 +419,8 @@ def main(cfg: DictConfig) -> None:
         f"{cfg.student.model}_test.json",
     )
     logger.info(f"Loading interaction problems: {problems_fpath}")
-    interaction_problems: List[Dict[str, Any]] = load_json_resilient(problems_fpath)
-    interaction_problems = interaction_problems[len(all_results): cfg.data.data_amount]
+    data: List[Dict[str, Any]] = load_json_resilient(problems_fpath)
+    interaction_problems = [p for p in data if p["id"] not in all_results][: cfg.data.data_amount]
     logger.info(f"Total interaction problems: {len(interaction_problems)}")
 
     # OOD problems
@@ -437,6 +437,9 @@ def main(cfg: DictConfig) -> None:
         evaluation_problems = load_json_resilient(ood_problems_path)
         evaluation_problems = evaluation_problems[len(all_results): cfg.data.data_amount]
         logger.info(f"Total evaluation (OOD) problems: {len(evaluation_problems)}")
+
+    if len(interaction_problems) == 0 or len(evaluation_problems) == 0:
+        return
 
     # Build teacher and student clients (names may be normalized inside)
     teacher_name, student_name = cfg.teacher.model, cfg.student.model
