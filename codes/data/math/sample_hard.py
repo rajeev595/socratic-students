@@ -19,7 +19,6 @@ from datetime import timedelta
 from typing import Any, Dict, List, Set, TypedDict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-import json
 import hydra
 from datasets import load_dataset
 from omegaconf import DictConfig

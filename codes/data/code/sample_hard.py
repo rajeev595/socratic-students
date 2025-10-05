@@ -284,7 +284,7 @@ def process_problem(
     # Evaluate each completion in parallel (safe wrapper)
     results: List[bool] = []
     timeouts = errors = 0
-    with ThreadPoolExecutor() as ex:
+    with ThreadPoolExecutor(max_workers=4) as ex:
         futs = [ex.submit(_safe_eval_code, (comp, problem, False, timeout_sec)) for comp in completions]
         for fut in as_completed(futs):
             info, passed = fut.result()
