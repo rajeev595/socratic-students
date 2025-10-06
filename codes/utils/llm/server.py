@@ -23,6 +23,8 @@ logging.basicConfig(
 _MODEL_ALIASES: Dict[str, str] = {
     # local instruct models
     "llama8": "meta-llama/Llama-3.1-8B-Instruct",
+    "llama3": "meta-llama/Llama-3.2-3B-Instruct",
+
     "qwen3": "Qwen/Qwen2.5-3B-Instruct",
     "qwen7": "Qwen/Qwen2.5-7B-Instruct",
     "qwen14": "Qwen/Qwen2.5-14B-Instruct",
