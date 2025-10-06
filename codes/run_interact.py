@@ -453,13 +453,16 @@ def main(cfg: DictConfig) -> None:
 
     total_teacher_prompt_tks = total_teacher_completion_tks = 0
     total_student_prompt_tks = total_student_completion_tks = 0
+    pbar = tqdm(total=len(interaction_problems), desc="Problems done", dynamic_ncols=True)
 
-    for i in range(0, len(interaction_problems), cfg.experiment.chunk_size):
-        interaction_problems_chunk = interaction_problems[i: i + cfg.experiment.chunk_size]
-        evaluation_problems_chunk = evaluation_problems[i: i + cfg.experiment.chunk_size]
+    # Parallel execution
+    with ThreadPoolExecutor(max_workers=cfg.experiment.num_workers) as executor:
+        for i in range(0, len(interaction_problems), cfg.experiment.chunk_size):
+            # Problem chunks in this iter
+            interaction_problems_chunk = interaction_problems[i: i + cfg.experiment.chunk_size]
+            evaluation_problems_chunk = evaluation_problems[i: i + cfg.experiment.chunk_size]
 
-        # Parallel execution
-        with ThreadPoolExecutor(max_workers=cfg.experiment.num_workers) as executor:
+            # Prepare jobs
             future_to_pid = {executor.submit(
                 run_problem,
                 cfg.data.type,
@@ -481,7 +484,7 @@ def main(cfg: DictConfig) -> None:
                 cfg.experiment.ood
             ): ip["id"] for (ip, ep) in zip(interaction_problems_chunk, evaluation_problems_chunk)}
 
-            for future in tqdm(as_completed(future_to_pid), total=len(future_to_pid), desc="Running interact"):
+            for future in as_completed(future_to_pid):
                 (
                     generations,
                     results,
@@ -505,6 +508,7 @@ def main(cfg: DictConfig) -> None:
                 total_teacher_completion_tks += teacher_completion_tks
                 total_student_prompt_tks += student_prompt_tks
                 total_student_completion_tks += student_completion_tks
+                pbar.update(1)
 
         # Save per-problem statistics and aggregate
         save_json_atomic(results_fpath, all_results)

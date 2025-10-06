@@ -265,11 +265,15 @@ def main(cfg: DictConfig) -> None:
 
         problems.append(problem)
 
-    for i in range(0, len(problems), cfg.experiment.chunk_size):
-        problems_chunk = problems[i: i + cfg.experiment.chunk_size]
+    pbar = tqdm(total=len(problems), desc="Problems done", dynamic_ncols=True)
 
-        # Parallel execution
-        with ThreadPoolExecutor(max_workers=cfg.experiment.num_workers) as executor:
+    # Parallel execution
+    with ThreadPoolExecutor(max_workers=cfg.experiment.num_workers) as executor:
+        for i in tqdm(range(0, len(problems), cfg.experiment.chunk_size), desc="Processing chunks"):
+            # Problem chunks in this iter
+            problems_chunk = problems[i: i + cfg.experiment.chunk_size]
+
+            # Prepare jobs
             future_to_pid = {}
             for problem in problems_chunk:
                 future_to_pid[
@@ -287,7 +291,7 @@ def main(cfg: DictConfig) -> None:
                     )
                 ] = problem
 
-            for future in tqdm(as_completed(future_to_pid), total=len(future_to_pid), desc="Curating"):
+            for future in as_completed(future_to_pid):
                 result, scores, p_tks, c_tks = future.result()
                 problem = future_to_pid[future]
 
@@ -306,20 +310,21 @@ def main(cfg: DictConfig) -> None:
 
                 total_prompt_tks += p_tks
                 total_completion_tks += c_tks
+                pbar.update(1)
 
-        save_json_atomic(
-            output_fpath, 
-            {
-                "collected": collected,
-                "teacher_blacklist": list(teacher_blacklist),
-                "student_ids": list(student_ids)
-            },
-            indent=2
-        )
-        logger.info("Collected examples total: %d passed: %d/%d samples!", len(collected), num_passk_examples, cfg.data.data_amount)
+            save_json_atomic(
+                output_fpath, 
+                {
+                    "collected": collected,
+                    "teacher_blacklist": list(teacher_blacklist),
+                    "student_ids": list(student_ids)
+                },
+                indent=2
+            )
+            logger.info("Collected examples total: %d passed: %d/%d samples!", len(collected), num_passk_examples, cfg.data.data_amount)
 
-        if num_passk_examples >= cfg.data.data_amount:
-            break
+            if num_passk_examples >= cfg.data.data_amount:
+                break
 
     logger.info("Saved %d total problems to %s", len(collected), output_fpath)
     logger.info("Token usage (approx): prompt=%d, completion=%d", total_prompt_tks, total_completion_tks)

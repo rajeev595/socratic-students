@@ -424,16 +424,28 @@ def main(cfg: DictConfig) -> None:
         with open(fpath_sft, "r") as f:
             for line in f:
                 ex = json.loads(line)
+                count_sft += 1
                 if ex.get("dagger_iter") == cfg.gen.dagger_iter:
                     existing_pids.add(ex["problem"]["id"])
-        logger.info(f"Loaded {len(existing_pids)} existing SFT-{cfg.gen.dagger_iter} examples from {fpath_sft}")
+        logger.info(f"Loaded {count_sft} existing SFT-{cfg.gen.dagger_iter} examples from {fpath_sft}")
 
     if os.path.exists(fpath_dpo):
         with open(fpath_dpo, "r") as f:
             for line in f:
                 ex = json.loads(line)
+                count_dpo += 1
                 if ex.get("dagger_iter") == cfg.gen.dagger_iter:
                     existing_pids.add(ex["problem"]["id"])
+        logger.info(f"Loaded {count_dpo} existing DPO-{cfg.gen.dagger_iter} examples from {fpath_dpo}")
+
+    if os.path.exists(fpath_grpo):
+        with open(fpath_grpo, "r") as f:
+            for line in f:
+                ex = json.loads(line)
+                count_grpo += 1
+                if ex.get("dagger_iter") == cfg.gen.dagger_iter:
+                    existing_pids.add(ex["problem"]["id"])
+        logger.info(f"Loaded {count_grpo} existing GRPO-{cfg.gen.dagger_iter} examples from {fpath_grpo}")
 
     # Problems
     problems_fpath = os.path.join(
@@ -488,13 +500,16 @@ def main(cfg: DictConfig) -> None:
     dpo_max_pairs_per_turn = getattr(cfg.gen, "dpo_max_pairs_per_turn", None)
     if dpo_max_pairs_per_turn is not None:
         dpo_max_pairs_per_turn = int(dpo_max_pairs_per_turn)
+    pbar = tqdm(total=len(interaction_problems), desc="Problems done", dynamic_ncols=True)
 
-    for i in range(0, len(interaction_problems), cfg.experiment.chunk_size):
-        interaction_problems_chunk = interaction_problems[i: i + cfg.experiment.chunk_size]
-        evaluation_problems_chunk = evaluation_problems[i: i + cfg.experiment.chunk_size]
+    # Parallel run
+    with ThreadPoolExecutor(max_workers=cfg.experiment.num_workers) as executor:
+        for i in range(0, len(interaction_problems), cfg.experiment.chunk_size):
+            # Problem chunks in this iter
+            interaction_problems_chunk = interaction_problems[i: i + cfg.experiment.chunk_size]
+            evaluation_problems_chunk = evaluation_problems[i: i + cfg.experiment.chunk_size]
 
-        # Parallel run
-        with ThreadPoolExecutor(max_workers=cfg.experiment.num_workers) as executor:
+            # Prepare jobs
             futures = []
             for interaction_problem, evaluation_problem in zip(interaction_problems_chunk, evaluation_problems_chunk):
                 futures.append(executor.submit(
@@ -524,7 +539,7 @@ def main(cfg: DictConfig) -> None:
                     dpo_max_pairs_per_turn,
                 ))
 
-            for future in tqdm(as_completed(futures), total=len(futures), desc="Processing problems"):
+            for future in as_completed(futures):
                 (
                     chosen,
                     pairs,
@@ -558,6 +573,8 @@ def main(cfg: DictConfig) -> None:
                 total_teacher_completion_tks += teacher_completion_tks
                 total_student_prompt_tks += student_prompt_tks
                 total_student_completion_tks += student_completion_tks
+                pbar.update(1)
+                logger.info(f"No. of examples collected DPO: {count_dpo} | SFT: {count_sft} | GRPO: {count_grpo}")
 
     # Close files
     f_dpo.close()

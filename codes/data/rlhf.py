@@ -244,8 +244,7 @@ def main(cfg: DictConfig) -> None:
                 count_sft += 1
                 if ex["dagger_iter"] == cfg.gen.dagger_iter:
                     existing_pids.add(ex["problem"]["id"])
-
-        logger.info(f"Loaded {len(existing_pids)} existing SFT-{cfg.gen.dagger_iter} examples from {fpath_sft}")
+        logger.info(f"Loaded {count_sft} existing SFT-{cfg.gen.dagger_iter} examples from {fpath_sft}")
 
     if os.path.exists(fpath_rlhf):
         with open(fpath_rlhf, "r") as f:
@@ -254,6 +253,7 @@ def main(cfg: DictConfig) -> None:
                 count_rlhf += 1
                 if ex["dagger_iter"] == cfg.gen.dagger_iter:
                     existing_pids.add(ex["problem"]["id"])
+        logger.info(f"Loaded {count_rlhf} existing RLHF-{cfg.gen.dagger_iter} examples from {fpath_rlhf}")
 
     # Load problems
     problems_fpath = os.path.join(
@@ -302,14 +302,16 @@ def main(cfg: DictConfig) -> None:
 
     f_rlhf = open(fpath_rlhf, "a" if os.path.exists(fpath_rlhf) else "w")
     f_sft = open(fpath_sft, "a" if os.path.exists(fpath_sft) else "w")
+    pbar = tqdm(total=len(interaction_problems), desc="Problems done", dynamic_ncols=True)
 
-    for i in range(0, len(interaction_problems), cfg.experiment.chunk_size):
-        interaction_problems_chunk = interaction_problems[i: i + cfg.experiment.chunk_size]
-        evaluation_problems_chunk = evaluation_problems[i: i + cfg.experiment.chunk_size]
+    # Parallel execution
+    with ThreadPoolExecutor(max_workers=cfg.experiment.num_workers) as executor:
+        for i in range(0, len(interaction_problems), cfg.experiment.chunk_size):
+            # Problem chunks in this iter
+            interaction_problems_chunk = interaction_problems[i: i + cfg.experiment.chunk_size]
+            evaluation_problems_chunk = evaluation_problems[i: i + cfg.experiment.chunk_size]
 
-        # Build pairs
-        with ThreadPoolExecutor(max_workers=cfg.experiment.num_workers) as executor:
-            # collect all the jobs
+            # Prepare jobs
             futures = []
             for interaction_problem, evaluation_problem in zip(interaction_problems_chunk, evaluation_problems_chunk):
                 futures.append(executor.submit(
@@ -335,7 +337,7 @@ def main(cfg: DictConfig) -> None:
                     cfg.experiment.ood
                 ))
 
-            for future in tqdm(as_completed(futures), total=len(futures), desc="Processing problems"):
+            for future in as_completed(futures):
                 (
                     chosen,
                     pairs,
@@ -361,6 +363,9 @@ def main(cfg: DictConfig) -> None:
                 total_teacher_completion_tks += teacher_completion_tks
                 total_student_prompt_tks += student_prompt_tks
                 total_student_completion_tks += student_completion_tks
+                pbar.update(1)
+
+                logger.info(f"No. of examples collected DPO: {count_rlhf} | SFT: {count_sft}")
 
     # Close files
     f_rlhf.close()
