@@ -186,7 +186,7 @@ def evaluate_math_completion(
         max_tokens=16
     )
 
-    return model_response, reply[0].startswith("yes")
+    return model_response, reply[0].lower().startswith("yes")
 
 
 MATH_FEEDBACK_SYS = """\
