@@ -129,8 +129,14 @@ def run_problem(
 
     pairs, chosen_list, grpo_groups = [], [], []
 
+    # --- Baseline reuse cache across turns ---
+    # pass@k dict corresponding to the EXACT 'texts' at the *start* of a turn.
+    last_baseline_scores: Dict[Any, float] = {}
+    last_baseline_valid: bool = False
+
     for turn in range(cur_start, total_turns, 2):
         # Optional assessment injected into previous text
+        assessment_injected = False
         if assessment_turn > 0 and turn == assessment_turn and len(texts) > 0:
             texts[-1] += get_assessment(
                 data_type=data_type,
@@ -140,6 +146,7 @@ def run_problem(
                 problem_dict=interaction_problem,
                 texts=texts,
             )
+            assessment_injected = True
             logger.debug(f"[{pid}] assessment injected at turn {turn}")
 
         # ---- Student: sample K candidate questions
@@ -157,7 +164,7 @@ def run_problem(
         total_student_prompt_tks += p_tks
         total_student_completion_tks += c_tks
 
-        # ---- Teacher for each candidate
+        # ---- Teacher for each candidate (serial, unchanged)
         teacher_replies = []
         for student_reply in student_replies:
             teacher_reply, p_tks, c_tks = interact(
@@ -175,9 +182,34 @@ def run_problem(
             total_teacher_prompt_tks += p_tks
             total_teacher_completion_tks += c_tks
 
-        # ---- Evaluate each (student Q, teacher A) pair
+        # ---- Establish the baseline ONCE per turn (reuse previous turn if valid)
+        if use_delta_reward:
+            if last_baseline_valid and not assessment_injected:
+                base_scores = last_baseline_scores
+            else:
+                convo_baseline = msgs_to_string(texts)
+                base_scores_raw, _, p_b, c_b = evaluate(
+                    prev_convo=convo_baseline,
+                    data_type=data_type,
+                    student_client=student_client,
+                    student_name=student_name,
+                    student_temperature=0.3,
+                    teacher_client=teacher_client,
+                    teacher_name=teacher_name,
+                    teacher_temperature=teacher_temperature,
+                    problem=evaluation_problem,
+                    k_values=k_values,
+                    num_samples=num_samples,
+                    is_ood=is_ood,
+                )
+                base_scores = _to_float_dict(base_scores_raw)
+                total_student_prompt_tks += p_b
+                total_student_completion_tks += c_b
+        else:
+            base_scores = {}
+
+        # ---- Evaluate each (student Q, teacher A) pair (current scores only)
         pass_at_k_scores_current = []
-        pass_at_k_scores_baseline = []  # for delta mode
         for student_reply, teacher_reply in zip(student_replies, teacher_replies):
             # current: history + candidate Q/A
             convo_current = msgs_to_string(texts + [student_reply, teacher_reply])
@@ -199,28 +231,10 @@ def run_problem(
             total_student_prompt_tks += p_tks
             total_student_completion_tks += c_tks
 
-            # baseline: history *without* candidate Q/A (counterfactual)
-            if use_delta_reward:
-                convo_baseline = msgs_to_string(texts)
-                base_scores, _, p_tks, c_tks = evaluate(
-                    prev_convo=convo_baseline,
-                    data_type=data_type,
-                    student_client=student_client,
-                    student_name=student_name,
-                    student_temperature=0.3,
-                    teacher_client=teacher_client,
-                    teacher_name=teacher_name,
-                    teacher_temperature=teacher_temperature,
-                    problem=evaluation_problem,
-                    k_values=k_values,
-                    num_samples=num_samples,
-                    is_ood=is_ood,
-                )
-                pass_at_k_scores_baseline.append(_to_float_dict(base_scores))
-                total_student_prompt_tks += p_tks
-                total_student_completion_tks += c_tks
-            else:
-                pass_at_k_scores_baseline.append({})
+        # Build a per-candidate baseline list (same baseline for all candidates this turn)
+        pass_at_k_scores_baseline = (
+            [base_scores for _ in range(len(student_replies))] if use_delta_reward else [{} for _ in range(len(student_replies))]
+        )
 
         # ---- Prompt messages used to elicit candidate questions
         sys_prompt = _select_sys_prompt(data_type, use_cot, True, evaluation_problem)
@@ -239,19 +253,19 @@ def run_problem(
             "candidates": [],
         }
 
-        for reply, cur_scores, base_scores in zip(student_replies, pass_at_k_scores_current, pass_at_k_scores_baseline):
+        for reply, cur_scores, base_scores_i in zip(student_replies, pass_at_k_scores_current, pass_at_k_scores_baseline):
             q_text = _extract_text(reply)
 
             # reward definition
             if use_delta_reward:
-                reward = _get_score(cur_scores, pass_k) - _get_score(base_scores, pass_k)
+                reward = _get_score(cur_scores, pass_k) - _get_score(base_scores_i, pass_k)
             else:
                 reward = _get_score(cur_scores, pass_k)
 
             # metrics payloads
             metrics_current = {int(k) if str(k).isdigit() else k: float(v) for k, v in cur_scores.items()}
             metrics_baseline = (
-                {int(k) if str(k).isdigit() else k: float(v) for k, v in base_scores.items()}
+                {int(k) if str(k).isdigit() else k: float(v) for k, v in base_scores_i.items()}
                 if use_delta_reward else {}
             )
             metrics_delta = (
@@ -273,11 +287,12 @@ def run_problem(
         # ---- Choose best by chosen pass@k on CURRENT (not delta) to roll convo forward
         # (we want the dialogue itself to improve; policy learning can still use delta.)
         best_values = [_get_score(s, pass_k) for s in pass_at_k_scores_current]
-        max_value = max(best_values)
-        best_idx = best_values.index(max_value)
-        best_pass_at_k_score = pass_at_k_scores_current[best_idx]
+        max_value = max(best_values) if best_values else 0.0
+        best_idx = best_values.index(max_value) if best_values else 0
+        best_pass_at_k_score = pass_at_k_scores_current[best_idx] if pass_at_k_scores_current else {}
 
         # ---- Exploration vs exploitation (propensity fix)
+        appended_idx = best_idx
         if random.random() < 1 - eps:
             texts += [student_replies[best_idx], teacher_replies[best_idx]]
             propensity = 1 - eps
@@ -285,8 +300,9 @@ def run_problem(
             non_best = [i for i in range(rlhf_samples) if i != best_idx]
             idx = random.choice(non_best) if non_best else best_idx
             texts += [student_replies[idx], teacher_replies[idx]]
+            appended_idx = idx
             # probability mass spread over (K-1) non-best choices
-            propensity = eps / max(1, (rlhf_samples - 1))
+            propensity = eps / max(1, rlhf_samples)
 
         # SFT item
         chosen = student_replies[best_idx]
@@ -327,13 +343,11 @@ def run_problem(
         for margin, reply, score_cur in filtered:
             # rewards for DPO: current or delta to stay consistent with GRPO
             if use_delta_reward:
-                # need baseline for this reply
-                idx = student_replies.index(reply)
-                base_scores = pass_at_k_scores_baseline[idx]
+                # baseline is shared across candidates this turn
                 chosen_reward_dict = {
                     "current": best_pass_at_k_score,
-                    "baseline": pass_at_k_scores_baseline[best_idx] if use_delta_reward else {},
-                    "delta@pass_k": _get_score(best_pass_at_k_score, pass_k) - _get_score(pass_at_k_scores_baseline[best_idx], pass_k) if use_delta_reward else _get_score(best_pass_at_k_score, pass_k)
+                    "baseline": base_scores,
+                    "delta@pass_k": _get_score(best_pass_at_k_score, pass_k) - _get_score(base_scores, pass_k)
                 }
                 rejected_reward_dict = {
                     "current": score_cur,
@@ -355,6 +369,12 @@ def run_problem(
             })
 
         logger.debug(f'pid-{evaluation_problem["id"]} turn-{turn} best pass@{pass_k}={_get_score(best_pass_at_k_score, pass_k):.3f}')
+
+        # ---- Update reusable baseline for NEXT turn
+        # The baseline for the next turn is the pass@k of the context we just appended (the *appended_idx* branch).
+        if use_delta_reward and pass_at_k_scores_current:
+            last_baseline_scores = pass_at_k_scores_current[appended_idx] or {}
+            last_baseline_valid = True
 
     return (
         chosen_list,
