@@ -6,6 +6,10 @@ hydra-core
 omegaconf
 sglang[all]
 accelerate
+peft
+trl
+bitsandbytes
+tensorboard
 
 # App / plotting
 streamlit
