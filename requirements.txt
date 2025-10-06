@@ -4,6 +4,8 @@ datasets
 tqdm
 hydra-core
 omegaconf
+sglang[all]
+accelerate
 
 # App / plotting
 streamlit
