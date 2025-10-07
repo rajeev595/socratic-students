@@ -56,6 +56,7 @@ train:
   lora_r: 16
   lora_alpha: 32
   lora_dropout: 0.05
+  lora_target_modules: ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]  
   sft_batch_size: 4
   dpo_batch_size: 2
   grpo_batch_size_groups: 1
@@ -64,12 +65,12 @@ train:
   dpo_lr: 1e-5
   grpo_lr: 5e-6  
   beta: 0.2
-  sft_epochs: 5
+  sft_epochs: 0
   dpo_epochs: 5
-  grpo_epochs: 2
+  grpo_epochs: 5
   grpo_tau: 0.7
   grpo_reward_norm: "zscore"
-  grpo_kl_coeff: 0.02  
+  grpo_kl_coeff: 0.0
   gpus: [0,1,2,3,4,5,6,7]
 
 # Experiment settings
@@ -82,8 +83,14 @@ experiment:
   start_from_turn: 1    # 1 (new), odd (student), even (teacher)
   total_turns: 11
   num_workers: 16
+  chunk_size: 25
 
 hydra:
   run:
     dir: ${paths.experiments}/${experiment.name}/${teacher.model}/${student.model}/${experiment.dataset}
   output_subdir: .
+
+  job_logging:
+    handlers:
+      file:
+        filename: ${hydra:job.name}_${now:%Y%m%d-%H%M%S}_${hydra:job.id}.log
