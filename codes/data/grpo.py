@@ -245,6 +245,7 @@ def run_problem(
         # ---------- Collect GRPO group ----------
         group = {
             "ex_id": pid,
+            "problem": evaluation_problem,
             "turn": turn,
             "prompt_messages": prompt_messages,
             "prompt_type": "messages",
