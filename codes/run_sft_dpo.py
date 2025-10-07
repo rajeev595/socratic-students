@@ -1,7 +1,7 @@
 import os
 import time
 import logging
-from typing import Optional
+from typing import List, Optional
 from datetime import timedelta
 
 import hydra
@@ -59,6 +59,7 @@ def setup_for_training(
     lora_r: int,
     lora_alpha: int,
     lora_dropout: float,
+    lora_target_modules: List[str],
     enable_gc: bool,  # control gradient checkpointing from caller
 ):
     """
@@ -142,10 +143,7 @@ def setup_for_training(
         lora_dropout=lora_dropout,
         bias="none",
         task_type="CAUSAL_LM",
-        target_modules=[
-            "q_proj", "k_proj", "v_proj", "o_proj",
-            "gate_proj", "up_proj", "down_proj",
-        ],
+        target_modules=lora_target_modules,
     )
 
     return model, tokenizer, peft_cfg
@@ -162,6 +160,7 @@ def train_sft(
     lora_r: int,
     lora_alpha: int,
     lora_dropout: float,
+    lora_target_modules: List[str],
     batch_size: int,
     grad_accum: int,
     lr: float,
@@ -174,6 +173,7 @@ def train_sft(
         lora_r,
         lora_alpha,
         lora_dropout,
+        lora_target_modules,
         enable_gc=True,
     )
 
@@ -194,9 +194,9 @@ def train_sft(
         ddp_find_unused_parameters=False,     # safer with adapters
         # eval + save cadence
         eval_strategy="steps",
-        eval_steps=10,
+        eval_steps=5,
         save_strategy="steps",
-        save_steps=10,
+        save_steps=5,
         save_total_limit=1,
         # load_best_model_at_end=True,
         metric_for_best_model="eval_loss",
@@ -242,6 +242,7 @@ def train_dpo(
     lora_r: int,
     lora_alpha: int,
     lora_dropout: float,
+    lora_target_modules: List[str],
     batch_size: int,
     grad_accum: int,
     lr: float,
@@ -255,6 +256,7 @@ def train_dpo(
         lora_r,
         lora_alpha,
         lora_dropout,
+        lora_target_modules,
         enable_gc=True,
     )
 
@@ -293,9 +295,9 @@ def train_dpo(
         ddp_find_unused_parameters=False,
         # eval + save cadence
         eval_strategy="steps",
-        eval_steps=10,
+        eval_steps=5,
         save_strategy="steps",
-        save_steps=10,
+        save_steps=5,
         save_total_limit=1,
         # load_best_model_at_end=True,
         metric_for_best_model="eval_loss",
@@ -362,86 +364,89 @@ def main(cfg: DictConfig) -> None:
     tokenizer.padding_side = "right"
     tokenizer.truncation_side = "right"
 
-    # SFT/DPO paths
-    train_fpath_sft = os.path.join(
-        str(cfg.paths.data),
-        str(cfg.teacher.model),
-        str(cfg.experiment.dataset),
-        f"{cfg.student.model}_cot_sft_iter{cfg.gen.dagger_iter}_train.jsonl" if cfg.experiment.cot else f"{cfg.student.model}_sft_iter{cfg.gen.dagger_iter}_train.jsonl"
-    )
-    val_fpath_sft = os.path.join(
-        str(cfg.paths.data),
-        str(cfg.teacher.model),
-        str(cfg.experiment.dataset),
-        f"{cfg.student.model}_cot_sft_iter{cfg.gen.dagger_iter}_val.jsonl" if cfg.experiment.cot else f"{cfg.student.model}_sft_iter{cfg.gen.dagger_iter}_val.jsonl"
-    )
-
-    train_fpath_dpo = os.path.join(
-        str(cfg.paths.data),
-        str(cfg.teacher.model),
-        str(cfg.experiment.dataset),
-        f"{cfg.student.model}_cot_dpo_iter{cfg.gen.dagger_iter}_train.jsonl" if cfg.experiment.cot else f"{cfg.student.model}_dpo_iter{cfg.gen.dagger_iter}_train.jsonl"
-    )
-    val_fpath_dpo = os.path.join(
-        str(cfg.paths.data),
-        str(cfg.teacher.model),
-        str(cfg.experiment.dataset),
-        f"{cfg.student.model}_cot_dpo_iter{cfg.gen.dagger_iter}_val.jsonl" if cfg.experiment.cot else f"{cfg.student.model}_dpo_iter{cfg.gen.dagger_iter}_val.jsonl"
-    )
-
-    ckpt_dir_sft = os.path.join(
-        str(cfg.paths.experiments),
-        str(cfg.experiment.name),
-        str(cfg.teacher.model),
-        str(cfg.student.model),
-        cfg.experiment.dataset,
-        "sft"
-    )
-    os.makedirs(ckpt_dir_sft, exist_ok=True)
-
-    ckpt_dir_dpo = os.path.join(
-        str(cfg.paths.experiments),
-        str(cfg.experiment.name),
-        str(cfg.teacher.model),
-        str(cfg.student.model),
-        cfg.experiment.dataset,
-        "dpo"
-    )
-    os.makedirs(ckpt_dir_dpo, exist_ok=True)
-
     # SFT
-    train_sft(
-        tokenizer=tokenizer,
-        train_fpath=train_fpath_sft,
-        val_fpath=val_fpath_sft,
-        out_dir=ckpt_dir_sft,
-        use_4bit=cfg.train.sft_use_4bit,
-        lora_r=cfg.train.lora_r,
-        lora_alpha=cfg.train.lora_alpha,
-        lora_dropout=cfg.train.lora_dropout,
-        batch_size=cfg.train.sft_batch_size,
-        grad_accum=cfg.train.grad_accum,
-        lr=cfg.train.sft_lr,
-        epochs=cfg.train.sft_epochs
-    )
+    ckpt_dir_sft = None
+    if cfg.train.sft_epochs > 0:
+        train_fpath_sft = os.path.join(
+            str(cfg.paths.data),
+            str(cfg.teacher.model),
+            str(cfg.experiment.dataset),
+            f"{cfg.student.model}_cot_sft_iter{cfg.gen.dagger_iter}_train.jsonl" if cfg.experiment.cot else f"{cfg.student.model}_sft_iter{cfg.gen.dagger_iter}_train.jsonl"
+        )
+        val_fpath_sft = os.path.join(
+            str(cfg.paths.data),
+            str(cfg.teacher.model),
+            str(cfg.experiment.dataset),
+            f"{cfg.student.model}_cot_sft_iter{cfg.gen.dagger_iter}_val.jsonl" if cfg.experiment.cot else f"{cfg.student.model}_sft_iter{cfg.gen.dagger_iter}_val.jsonl"
+        )
+        ckpt_dir_sft = os.path.join(
+            str(cfg.paths.experiments),
+            str(cfg.experiment.name),
+            str(cfg.teacher.model),
+            str(cfg.student.model),
+            cfg.experiment.dataset,
+            "sft"
+        )
+        os.makedirs(ckpt_dir_sft, exist_ok=True)
+        train_sft(
+            tokenizer=tokenizer,
+            train_fpath=train_fpath_sft,
+            val_fpath=val_fpath_sft,
+            out_dir=ckpt_dir_sft,
+            use_4bit=cfg.train.sft_use_4bit,
+            lora_r=cfg.train.lora_r,
+            lora_alpha=cfg.train.lora_alpha,
+            lora_dropout=cfg.train.lora_dropout,
+            lora_target_modules=cfg.train.lora_target_modules,
+            batch_size=cfg.train.sft_batch_size,
+            grad_accum=cfg.train.grad_accum,
+            lr=cfg.train.sft_lr,
+            epochs=cfg.train.sft_epochs
+        )
 
-    # DPO (start from SFT adapter)
-    train_dpo(
-        tokenizer,
-        train_fpath=train_fpath_dpo,
-        val_fpath=val_fpath_dpo,
-        init_adapter_dir=ckpt_dir_sft,
-        out_dir=ckpt_dir_dpo,
-        use_4bit=cfg.train.rlhf_use_4bit,
-        lora_r=cfg.train.lora_r,
-        lora_alpha=cfg.train.lora_alpha,
-        lora_dropout=cfg.train.lora_dropout,
-        batch_size=cfg.train.dpo_batch_size,
-        grad_accum=cfg.train.grad_accum,
-        lr=cfg.train.dpo_lr,
-        beta=cfg.train.beta,
-        epochs=cfg.train.dpo_epochs
-    )
+    # DPO
+    if cfg.train.dpo_epochs > 0:
+        train_fpath_dpo = os.path.join(
+            str(cfg.paths.data),
+            str(cfg.teacher.model),
+            str(cfg.experiment.dataset),
+            f"{cfg.student.model}_cot_dpo_iter{cfg.gen.dagger_iter}_train.jsonl" if cfg.experiment.cot else f"{cfg.student.model}_dpo_iter{cfg.gen.dagger_iter}_train.jsonl"
+        )
+        val_fpath_dpo = os.path.join(
+            str(cfg.paths.data),
+            str(cfg.teacher.model),
+            str(cfg.experiment.dataset),
+            f"{cfg.student.model}_cot_dpo_iter{cfg.gen.dagger_iter}_val.jsonl" if cfg.experiment.cot else f"{cfg.student.model}_dpo_iter{cfg.gen.dagger_iter}_val.jsonl"
+        )
+
+        ckpt_dir_dpo = os.path.join(
+            str(cfg.paths.experiments),
+            str(cfg.experiment.name),
+            str(cfg.teacher.model),
+            str(cfg.student.model),
+            cfg.experiment.dataset,
+            "dpo"
+        )
+        os.makedirs(ckpt_dir_dpo, exist_ok=True)
+
+        # DPO (start from SFT adapter)
+        train_dpo(
+            tokenizer,
+            train_fpath=train_fpath_dpo,
+            val_fpath=val_fpath_dpo,
+            init_adapter_dir=ckpt_dir_sft,
+            out_dir=ckpt_dir_dpo,
+            use_4bit=cfg.train.rlhf_use_4bit,
+            lora_r=cfg.train.lora_r,
+            lora_alpha=cfg.train.lora_alpha,
+            lora_dropout=cfg.train.lora_dropout,
+            lora_target_modules=cfg.train.lora_target_modules,
+            batch_size=cfg.train.dpo_batch_size,
+            grad_accum=cfg.train.grad_accum,
+            lr=cfg.train.dpo_lr,
+            beta=cfg.train.beta,
+            epochs=cfg.train.dpo_epochs
+        )
 
     elapsed = time.perf_counter() - start_time
     logger.info("Total time elapsed: %s", timedelta(seconds=int(elapsed)))
