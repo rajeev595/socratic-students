@@ -269,7 +269,10 @@ def main(cfg: DictConfig) -> None:
 
     # Parallel execution
     with ThreadPoolExecutor(max_workers=cfg.experiment.num_workers) as executor:
-        for i in tqdm(range(0, len(problems), cfg.experiment.chunk_size), desc="Processing chunks"):
+        for i in range(0, len(problems), cfg.experiment.chunk_size):
+            if num_passk_examples >= cfg.data.data_amount:
+                break
+
             # Problem chunks in this iter
             problems_chunk = problems[i: i + cfg.experiment.chunk_size]
 
@@ -311,6 +314,8 @@ def main(cfg: DictConfig) -> None:
                 total_prompt_tks += p_tks
                 total_completion_tks += c_tks
                 pbar.update(1)
+                logger.info("Collected examples: total %d | passed: %d/%d samples!", len(collected), num_passk_examples, cfg.data.data_amount)
+                logger.info("%s", pbar.format_meter(n=pbar.n, total=pbar.total, elapsed=pbar.format_dict["elapsed"], prefix=pbar.desc + ": "))
 
             save_json_atomic(
                 output_fpath, 
@@ -321,13 +326,11 @@ def main(cfg: DictConfig) -> None:
                 },
                 indent=2
             )
-            logger.info("Collected examples total: %d passed: %d/%d samples!", len(collected), num_passk_examples, cfg.data.data_amount)
 
-            if num_passk_examples >= cfg.data.data_amount:
-                break
-
-    logger.info("Saved %d total problems to %s", len(collected), output_fpath)
+    logger.info("Total problems done: %d/%d", pbar.n, len(problems))
+    logger.info("Saved examples: total %d | passed %d to %s", len(collected), num_passk_examples, output_fpath)
     logger.info("Token usage (approx): prompt=%d, completion=%d", total_prompt_tks, total_completion_tks)
+    pbar.close()
 
     # Count the no. of examples
     count_examples(collected)
