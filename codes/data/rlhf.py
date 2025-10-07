@@ -266,8 +266,8 @@ def main(cfg: DictConfig) -> None:
     data = load_json_resilient(problems_fpath)
     interaction_problems: List[Dict[str, Any]] = [
         p for p in data if p["id"] not in existing_pids
-    ][: cfg.data.data_amount]
-    logger.info(f"Total interaction problems: {len(interaction_problems)}")
+    ][: max(0, cfg.data.data_amount - len(existing_pids))]
+    logger.info(f"Interaction problems: finished {len(existing_pids)} | pending {len(interaction_problems)}")
 
     # OOD problems
     evaluation_problems = interaction_problems
@@ -283,9 +283,8 @@ def main(cfg: DictConfig) -> None:
         data = load_json_resilient(ood_problems_path)
         evaluation_problems = [
             p for p in data if p["id"] not in existing_pids
-        ][: cfg.data.data_amount]
-
-        logger.info(f"Total evaluation (OOD) problems: {len(evaluation_problems)}")
+        ][: max(0, cfg.data.data_amount - len(existing_pids))]
+        logger.info(f"Evaluation (OOD) problems: finished {len(existing_pids)} | pending {len(evaluation_problems)}")
 
     # Build teacher and student clients (names may be normalized inside)
     teacher_name, student_name = cfg.teacher.model, cfg.student.model
@@ -364,14 +363,16 @@ def main(cfg: DictConfig) -> None:
                 total_student_prompt_tks += student_prompt_tks
                 total_student_completion_tks += student_completion_tks
                 pbar.update(1)
-
                 logger.info(f"No. of examples collected DPO: {count_rlhf} | SFT: {count_sft}")
+                logger.info("%s", pbar.format_meter(n=pbar.n, total=pbar.total, elapsed=pbar.format_dict["elapsed"], prefix=pbar.desc + ": "))
 
     # Close files
     f_rlhf.close()
     f_sft.close()
+    pbar.close()
 
     # Log summary
+    logger.info("Total problems done: %d/%d", pbar.n, len(evaluation_problems))    
     logger.info(f"Saved {count_rlhf} preference pairs to {fpath_rlhf}")
     logger.info(f"Saved {count_sft} sft examples to {fpath_sft}")
     logger.info(

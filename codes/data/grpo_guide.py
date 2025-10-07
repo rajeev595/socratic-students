@@ -433,8 +433,8 @@ def main(cfg: DictConfig) -> None:
     data = load_json_resilient(problems_fpath)
     interaction_problems: List[Dict[str, Any]] = [
         p for p in data if p["id"] not in existing_pids
-    ][: cfg.data.data_amount]
-    logger.info(f"Total interaction problems: {len(interaction_problems)}")
+    ][: max(0, cfg.data.data_amount - len(existing_pids))]
+    logger.info(f"Interaction problems: finished {len(existing_pids)} | pending {len(interaction_problems)}")
 
     # OOD (optional)
     evaluation_problems = interaction_problems
@@ -447,8 +447,8 @@ def main(cfg: DictConfig) -> None:
         data = load_json_resilient(ood_problems_path)
         evaluation_problems = [
             p for p in data if p["id"] not in existing_pids
-        ][: cfg.data.data_amount]
-        logger.info(f"Total evaluation (OOD) problems: {len(evaluation_problems)}")
+        ][: max(0, cfg.data.data_amount - len(existing_pids))]
+        logger.info(f"Evaluation (OOD) problems: finished {len(existing_pids)} | pending {len(evaluation_problems)}")
 
     # Clients
     teacher_name, student_name, guide_name = cfg.teacher.model, cfg.student.model, cfg.guide.model
@@ -553,17 +553,15 @@ def main(cfg: DictConfig) -> None:
                 total_student_completion_tks += s_cp
                 total_guide_prompt_tks += g_pp
                 total_guide_completion_tks += g_cp
-
                 pbar.update(1)
-                logger.info(
-                    f"Collected — DPO: {count_dpo} | SFT: {count_sft} | GRPO: {count_grpo} "
-                    f"(Δ since start of run)."
-                )
+                logger.info(f"Collected — DPO: {count_dpo} | SFT: {count_sft} | GRPO: {count_grpo} ")
+                logger.info("%s", pbar.format_meter(n=pbar.n, total=pbar.total, elapsed=pbar.format_dict["elapsed"], prefix=pbar.desc + ": "))
 
     # Close files
     f_dpo.close()
     f_sft.close()
     f_grpo.close()
+    pbar.close()
 
     # Summary
     logger.info(f"------- {cfg.data.split} -------")
