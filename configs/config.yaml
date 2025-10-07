@@ -93,4 +93,4 @@ hydra:
   job_logging:
     handlers:
       file:
-        filename: ${hydra:job.name}_${now:%Y%m%d-%H%M%S}_${hydra:job.id}.log
+        filename: ${hydra:runtime.output_dir}/${hydra:job.name}_${data.split}.log
