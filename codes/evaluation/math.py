@@ -182,7 +182,7 @@ def evaluate_math_completion(
         model_name=model_name,
         messages=messages,
         n=1,
-        temperature=temperature,
+        temperature=0.0,
         max_tokens=16
     )
 
