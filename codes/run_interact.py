@@ -420,7 +420,7 @@ def main(cfg: DictConfig) -> None:
     )
     logger.info(f"Loading interaction problems: {problems_fpath}")
     data: List[Dict[str, Any]] = load_json_resilient(problems_fpath)
-    interaction_problems = [p for p in data if p["id"] not in all_results][: cfg.data.data_amount]
+    interaction_problems = [p for p in data if p["id"] not in all_results][: max(0, cfg.data.data_amount - len(all_results))]
     logger.info(f"Total interaction problems: {len(interaction_problems)}")
 
     # OOD problems
@@ -434,8 +434,8 @@ def main(cfg: DictConfig) -> None:
         )
 
         logger.info(f"Loading evaluation (OOD) problems: {ood_problems_path}")
-        evaluation_problems = load_json_resilient(ood_problems_path)
-        evaluation_problems = evaluation_problems[len(all_results): cfg.data.data_amount]
+        data: List[Dict[str, Any]] = load_json_resilient(ood_problems_path)
+        evaluation_problems = [p for p in data if p["id"] not in all_results][: max(0, cfg.data.data_amount - len(all_results))]
         logger.info(f"Total evaluation (OOD) problems: {len(evaluation_problems)}")
 
     if len(interaction_problems) == 0 or len(evaluation_problems) == 0:
@@ -509,9 +509,11 @@ def main(cfg: DictConfig) -> None:
                 total_student_prompt_tks += student_prompt_tks
                 total_student_completion_tks += student_completion_tks
                 pbar.update(1)
+                logger.info("%s", pbar.format_meter(n=pbar.n, total=pbar.total, elapsed=pbar.format_dict["elapsed"], prefix=pbar.desc + ": "))
 
-        # Save per-problem statistics and aggregate
-        save_json_atomic(results_fpath, all_results)
+            # Save per-problem statistics each chunk
+            save_json_atomic(results_fpath, all_results)
+    pbar.close()
 
     # compute bootstrapped aggregate results
     avg_results = bootstrap_aggregate(all_results)
