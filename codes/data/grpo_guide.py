@@ -432,7 +432,7 @@ def main(cfg: DictConfig) -> None:
     logger.info(f"Loading interaction problems: {problems_fpath}")
     data = load_json_resilient(problems_fpath)
     interaction_problems: List[Dict[str, Any]] = [
-        p for p in data if p["id"] not in existing_pids
+        p for p in data if p["id"] not in existing_pids and str(p["id"]) not in existing_pids
     ][: max(0, cfg.data.data_amount - len(existing_pids))]
     logger.info(f"Interaction problems: finished {len(existing_pids)} | pending {len(interaction_problems)}")
 

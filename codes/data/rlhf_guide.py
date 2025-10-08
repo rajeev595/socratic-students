@@ -289,9 +289,9 @@ def main(cfg: DictConfig) -> None:
     logger.info(f"Loading interaction problems: {problems_fpath}")
     with open(problems_fpath, "r") as f:
         data: List[Dict[str, Any]] = json.load(f)
-    interaction_problems = [
-        p for p in data if p["id"] not in existing_pids
-    ][: cfg.data.data_amount]
+    interaction_problems: List[Dict[str, Any]] = [
+        p for p in data if p["id"] not in existing_pids and str(p["id"]) not in existing_pids
+    ][: max(0, cfg.data.data_amount - len(existing_pids))]
     logger.info(f"Total interaction problems: {len(interaction_problems)}")
 
     # OOD problems

@@ -420,7 +420,9 @@ def main(cfg: DictConfig) -> None:
     )
     logger.info(f"Loading interaction problems: {problems_fpath}")
     data: List[Dict[str, Any]] = load_json_resilient(problems_fpath)
-    interaction_problems = [p for p in data if p["id"] not in all_results][: max(0, cfg.data.data_amount - len(all_results))]
+    interaction_problems = [
+        p for p in data if p["id"] not in all_results and str(p["id"]) not in all_results
+    ][: max(0, cfg.data.data_amount - len(all_results))]
     logger.info(f"Total interaction problems: {len(interaction_problems)}")
 
     # OOD problems
@@ -435,7 +437,9 @@ def main(cfg: DictConfig) -> None:
 
         logger.info(f"Loading evaluation (OOD) problems: {ood_problems_path}")
         data: List[Dict[str, Any]] = load_json_resilient(ood_problems_path)
-        evaluation_problems = [p for p in data if p["id"] not in all_results][: max(0, cfg.data.data_amount - len(all_results))]
+        evaluation_problems = [
+            p for p in data if p["id"] not in all_results and str(p["id"]) not in all_results
+        ][: max(0, cfg.data.data_amount - len(all_results))]
         logger.info(f"Total evaluation (OOD) problems: {len(evaluation_problems)}")
 
     if len(interaction_problems) == 0 or len(evaluation_problems) == 0:

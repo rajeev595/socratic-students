@@ -476,7 +476,7 @@ def main(cfg: DictConfig) -> None:
         logger.info(f"Loading evaluation (OOD) problems: {ood_problems_path}")
         data = load_json_resilient(ood_problems_path)
         evaluation_problems = [
-            p for p in data if p["id"] not in existing_pids
+            p for p in data if p["id"] not in existing_pids and str(p["id"]) not in existing_pids
         ][: max(0, cfg.data.data_amount - len(existing_pids))]
         logger.info(f"Evaluation (OOD) problems: finished {len(existing_pids)} | pending {len(evaluation_problems)}")
 
