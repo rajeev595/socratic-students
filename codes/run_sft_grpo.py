@@ -306,6 +306,11 @@ class ListwiseTrainer(SFTTrainer):
                 p.requires_grad_(False)
             self.ref_model.eval()
 
+    def _prepare_dataset(self, dataset, *args, **kwargs):
+        # We already prepared/tokenized the dataset in preprocess_grpo_group
+        # so return it unchanged to avoid TRL's default "text"-based tokenization.
+        return dataset
+
     def _seq_logprob(self, logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
         logp_tok = F.log_softmax(logits, dim=-1)
         tgt = labels.clone()
@@ -325,7 +330,7 @@ class ListwiseTrainer(SFTTrainer):
         lp = self._seq_logprob(out.logits, inputs["labels"])
         return torch.softmax(lp.view(-1, int(inputs["K"][0].item())), dim=1)
 
-    def compute_loss(self, model, inputs, return_outputs=False):
+    def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
         K = int(inputs["K"][0].item())
         B = inputs["rewards"].size(0)
 
@@ -431,12 +436,13 @@ def train_grpo(
         output_dir=out_dir,
         per_device_train_batch_size=batch_size_groups,  # groups per step
         gradient_accumulation_steps=grad_accum,
+        eval_accumulation_steps=1,
         learning_rate=lr,
         num_train_epochs=epochs,
         gradient_checkpointing=True,
         ddp_find_unused_parameters=False,
         eval_strategy="steps",
-        eval_steps=10,
+        eval_steps=2,
         save_strategy="steps",
         save_steps=10,
         save_total_limit=1,
@@ -446,6 +452,8 @@ def train_grpo(
         logging_steps=5,
         report_to="tensorboard",
         remove_unused_columns=False,
+        dataset_text_field=None,
+        packing=False
     )
 
     last_checkpoint = None
@@ -459,7 +467,7 @@ def train_grpo(
         eval_dataset=val_ds,
         data_collator=collator,
         peft_config=peft_cfg,
-        processing_class=tokenizer,
+        processing_class=None,
         tau=tau,
         reward_norm=reward_norm,
         kl_coeff=kl_coeff,
@@ -545,21 +553,21 @@ def main(cfg: DictConfig) -> None:
     ckpt_dir_sft  = os.path.join(base_ckpt, "sft");  os.makedirs(ckpt_dir_sft,  exist_ok=True)
     ckpt_dir_grpo = os.path.join(base_ckpt, "grpo"); os.makedirs(ckpt_dir_grpo, exist_ok=True)
 
-    # ---- Run SFT ----
-    train_sft(
-        tokenizer=tokenizer,
-        train_fpath=train_fpath_sft,
-        val_fpath=val_fpath_sft,
-        out_dir=ckpt_dir_sft,
-        use_4bit=cfg.train.sft_use_4bit,
-        lora_r=cfg.train.lora_r,
-        lora_alpha=cfg.train.lora_alpha,
-        lora_dropout=cfg.train.lora_dropout,
-        batch_size=cfg.train.sft_batch_size,
-        grad_accum=cfg.train.grad_accum,
-        lr=cfg.train.sft_lr,
-        epochs=cfg.train.sft_epochs
-    )
+    # # ---- Run SFT ----
+    # train_sft(
+    #     tokenizer=tokenizer,
+    #     train_fpath=train_fpath_sft,
+    #     val_fpath=val_fpath_sft,
+    #     out_dir=ckpt_dir_sft,
+    #     use_4bit=cfg.train.sft_use_4bit,
+    #     lora_r=cfg.train.lora_r,
+    #     lora_alpha=cfg.train.lora_alpha,
+    #     lora_dropout=cfg.train.lora_dropout,
+    #     batch_size=cfg.train.sft_batch_size,
+    #     grad_accum=cfg.train.grad_accum,
+    #     lr=cfg.train.sft_lr,
+    #     epochs=cfg.train.sft_epochs
+    # )
 
     # ---- Run GRPO (init from SFT) ----
     train_grpo(
