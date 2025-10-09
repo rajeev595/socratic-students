@@ -151,6 +151,9 @@ def setup_for_training(
 
 
 def get_best_ckpt_dir(root_dir: str) -> str:
+    if root_dir is None:
+        return None
+
     state_p = os.path.join(root_dir, "trainer_state.json")
     if os.path.exists(state_p):
         with open(state_p) as f:
