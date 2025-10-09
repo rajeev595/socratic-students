@@ -313,7 +313,7 @@ def train_dpo(
         save_steps=5,
         save_total_limit=1,
         # load_best_model_at_end=True,
-        metric_for_best_model="eval/rewards/accuracies",
+        metric_for_best_model="eval_rewards/accuracies",
         greater_is_better=True,
         logging_strategy="steps",
         logging_steps=5,
