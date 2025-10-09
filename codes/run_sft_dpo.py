@@ -1,11 +1,12 @@
 import os
+import json
 import time
 import logging
 from typing import List, Optional
 from datetime import timedelta
 
 import hydra
-from omegaconf import DictConfig
+from omegaconf import DictConfig, ListConfig
 
 import torch
 from datasets import load_dataset
@@ -148,6 +149,18 @@ def setup_for_training(
 
     return model, tokenizer, peft_cfg
 
+
+def get_best_ckpt_dir(root_dir: str) -> str:
+    state_p = os.path.join(root_dir, "trainer_state.json")
+    if os.path.exists(state_p):
+        with open(state_p) as f:
+            st = json.load(f)
+        best = st.get("best_model_checkpoint")
+        if best and os.path.exists(best):
+            return best  # e.g., ".../sft/checkpoint-450"
+    return root_dir  # fallback: last-step export
+
+
 # -----------------------------
 # SFT training
 # -----------------------------
@@ -190,15 +203,15 @@ def train_sft(
         gradient_accumulation_steps=grad_accum,
         learning_rate=lr,
         num_train_epochs=epochs,
-        gradient_checkpointing=True,          # keep GC for SFT
-        ddp_find_unused_parameters=False,     # safer with adapters
+        gradient_checkpointing=True,        # keep GC for SFT
+        ddp_find_unused_parameters=False,   # safer with adapters
         # eval + save cadence
         eval_strategy="steps",
         eval_steps=5,
         save_strategy="steps",
         save_steps=5,
         save_total_limit=1,
-        # load_best_model_at_end=True,
+        # load_best_model_at_end=True,      # Causes OOM, turn it OFF
         metric_for_best_model="eval_loss",
         greater_is_better=False,
         logging_strategy="steps",
@@ -300,8 +313,8 @@ def train_dpo(
         save_steps=5,
         save_total_limit=1,
         # load_best_model_at_end=True,
-        metric_for_best_model="eval_loss",
-        greater_is_better=False,
+        metric_for_best_model="eval/rewards/accuracies",
+        greater_is_better=True,
         logging_strategy="steps",
         logging_steps=5,
         report_to="tensorboard",
@@ -353,6 +366,11 @@ def main(cfg: DictConfig) -> None:
     # model names
     student_name = _MODEL_ALIASES[cfg.student.model]
 
+    # lora target modules
+    lora_target_modules = cfg.train.lora_target_modules
+    if isinstance(lora_target_modules, (list, ListConfig)):
+        lora_target_modules = list(lora_target_modules)
+
     # Tokenizer must match the student’s chat template
     tokenizer = AutoTokenizer.from_pretrained(
         student_name, 
@@ -397,7 +415,7 @@ def main(cfg: DictConfig) -> None:
             lora_r=cfg.train.lora_r,
             lora_alpha=cfg.train.lora_alpha,
             lora_dropout=cfg.train.lora_dropout,
-            lora_target_modules=cfg.train.lora_target_modules,
+            lora_target_modules=lora_target_modules,
             batch_size=cfg.train.sft_batch_size,
             grad_accum=cfg.train.grad_accum,
             lr=cfg.train.sft_lr,
@@ -434,13 +452,13 @@ def main(cfg: DictConfig) -> None:
             tokenizer,
             train_fpath=train_fpath_dpo,
             val_fpath=val_fpath_dpo,
-            init_adapter_dir=ckpt_dir_sft,
+            init_adapter_dir=get_best_ckpt_dir(ckpt_dir_sft),
             out_dir=ckpt_dir_dpo,
             use_4bit=cfg.train.rlhf_use_4bit,
             lora_r=cfg.train.lora_r,
             lora_alpha=cfg.train.lora_alpha,
             lora_dropout=cfg.train.lora_dropout,
-            lora_target_modules=cfg.train.lora_target_modules,
+            lora_target_modules=lora_target_modules,
             batch_size=cfg.train.dpo_batch_size,
             grad_accum=cfg.train.grad_accum,
             lr=cfg.train.dpo_lr,
