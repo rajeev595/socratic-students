@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 import time
 import socket
 import signal
@@ -227,7 +228,18 @@ def launch_sglang_client(
     if max_model_len:
         cmd += ["--max-model-len", str(max_model_len)]
     if lora_paths:
-        cmd += ["--lora-paths", lora_paths]  # per your flag
+        cmd.append("--lora-paths")
+
+        # Iterate over name:path pairs in the dict
+        for name, path in lora_paths.items():
+            # Create the JSON schema that SGLang expects
+            lora_spec = {
+                "lora_name": name,
+                "lora_path": path,
+                "pinned": True
+            }
+            # Append to command as separate args
+            cmd.append(json.dumps(lora_spec))
     if extra_server_args:
         cmd += list(extra_server_args)
 
@@ -259,7 +271,7 @@ def launch_vllm_client(
     host: str = "127.0.0.1",
     tp: Optional[int] = None,       # tensor parallel (defaults to len(gpus))
     dtype: Optional[str] = None,    # "bfloat16" | "float16" | None (vLLM default; NO 'auto')
-    lora_path: Optional[str] = None,# if provided: uses --enable-lora --lora-modules default=<path>
+    lora_paths: Optional[str] = None,# if provided: uses --enable-lora --lora-modules default=<path>
     allow_download: bool = True,
     trust_remote_code: bool = True,
     max_model_len: Optional[int] = None,       # --max-model-len
@@ -288,7 +300,7 @@ def launch_vllm_client(
     # Build `vllm serve` command (OpenAI-compatible endpoint)
     cmd = [
         exe, "serve",
-        "--model", model,
+        model,
         "--host", host,
         "--port", str(port),
         "--tensor-parallel-size", str(tp),
@@ -301,9 +313,12 @@ def launch_vllm_client(
         cmd += ["--dtype", dtype]  # note: vLLM expects explicit dtype or omit entirely
     if max_model_len:
         cmd += ["--max-model-len", str(max_model_len)]
-    if lora_path:
-        # Common modern flags; adjust via extra_server_args if your version differs
-        cmd += ["--enable-lora", "--lora-modules", f"default={lora_path}"]
+    if lora_paths:
+        cmd += ["--enable-lora", "--lora-modules"]
+
+        # Iterate over name:path pairs in the dict
+        for name, path in lora_paths.items():
+            cmd.append(f"{name}={path}")
     if extra_server_args:
         cmd += list(extra_server_args)
 
@@ -378,7 +393,7 @@ def build_client(
             host=host,
             tp=tp,
             dtype=dtype_for_vllm,
-            lora_path=lora_paths,
+            lora_paths=lora_paths,
             allow_download=allow_download,
             trust_remote_code=trust_remote_code,
             max_model_len=max_model_len,
