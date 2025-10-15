@@ -23,6 +23,8 @@ from tenacity import (
     wait_random_exponential,
 )
 
+from codes.utils.llm.server import _MODEL_ALIASES
+
 
 # ---------------------------------------------------------------------------
 # Chat completion
@@ -70,7 +72,7 @@ def chat_complete_local(
             use_messages = [{"role": "user", "content": sys_msg}] + use_messages[1:]
 
     resp = client.chat.completions.create(
-        model=model_name,
+        model=_MODEL_ALIASES[model_name],
         messages=use_messages,
         n=n,
         temperature=temperature,
