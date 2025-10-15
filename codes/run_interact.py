@@ -416,7 +416,7 @@ def main(cfg: DictConfig) -> None:
         str(cfg.teacher.model),
         dataset,
         f"splits_{cfg.gen.pass_at_k_threshold}",
-        f"{cfg.student.model}_test.json",
+        f"{cfg.student.model}_{cfg.data.split}.json",
     )
     logger.info(f"Loading interaction problems: {problems_fpath}")
     data: List[Dict[str, Any]] = load_json_resilient(problems_fpath)
@@ -432,7 +432,7 @@ def main(cfg: DictConfig) -> None:
             str(cfg.paths.data),
             str(cfg.teacher.model),
             dataset,
-            f"{cfg.student.model}_ood_test.json",
+            f"{cfg.student.model}_ood_{cfg.data.split}.json",
         )
 
         logger.info(f"Loading evaluation (OOD) problems: {ood_problems_path}")
