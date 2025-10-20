@@ -292,7 +292,7 @@ def main(cfg: DictConfig) -> None:
         teacher_name, cfg.teacher.gpus, cfg.teacher.server
     )
     student_client = build_client(
-        student_name, cfg.student.gpus, cfg.student.server
+        student_name, cfg.student.gpus, cfg.student.server, lora=cfg.student.lora
     )
     logger.info("Teacher=%s | Student=%s", teacher_name, student_name)
 
@@ -320,7 +320,7 @@ def main(cfg: DictConfig) -> None:
                     teacher_name,
                     cfg.teacher.temperature,
                     student_client,
-                    student_name,
+                    cfg.student.lora.name or student_name,
                     cfg.student.temperature,
                     interaction_problem,
                     evaluation_problem,
