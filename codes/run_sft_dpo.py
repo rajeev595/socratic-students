@@ -392,12 +392,14 @@ def main(cfg: DictConfig) -> None:
             str(cfg.paths.data),
             str(cfg.teacher.model),
             str(cfg.experiment.dataset),
+            "curriculum",
             f"{cfg.student.model}_cot_sft_iter{cfg.gen.dagger_iter}_train.jsonl" if cfg.experiment.cot else f"{cfg.student.model}_sft_iter{cfg.gen.dagger_iter}_train.jsonl"
         )
         val_fpath_sft = os.path.join(
             str(cfg.paths.data),
             str(cfg.teacher.model),
             str(cfg.experiment.dataset),
+            "curriculum",
             f"{cfg.student.model}_cot_sft_iter{cfg.gen.dagger_iter}_val.jsonl" if cfg.experiment.cot else f"{cfg.student.model}_sft_iter{cfg.gen.dagger_iter}_val.jsonl"
         )
         ckpt_dir_sft = os.path.join(
