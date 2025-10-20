@@ -318,7 +318,7 @@ def main(cfg: DictConfig) -> None:
         teacher_name, cfg.teacher.gpus, cfg.teacher.server
     )
     student_client = build_client(
-        student_name, cfg.student.gpus, cfg.student.server
+        student_name, cfg.student.gpus, cfg.student.server, lora=cfg.student.lora
     )
     guide_client = build_client(
         guide_name, cfg.guide.gpus, cfg.guide.server
@@ -344,7 +344,7 @@ def main(cfg: DictConfig) -> None:
                 teacher_name,
                 cfg.teacher.temperature,
                 student_client,
-                student_name,
+                cfg.student.lora.name or student_name,
                 cfg.student.temperature,
                 guide_client,
                 guide_name,
