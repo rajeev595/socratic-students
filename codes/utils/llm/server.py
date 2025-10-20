@@ -190,13 +190,13 @@ def launch_sglang_client(
     host: str = "127.0.0.1",
     tp: Optional[int] = None,
     dtype: str = "auto",
-    lora_paths: Optional[str] = None,   # uses --lora-paths "path1,path2"
+    lora: Optional[str] = None,         # uses --lora-paths "path1,path2"
     allow_download: bool = True,
     trust_remote_code: bool = True,
     max_model_len: Optional[int] = None,
     extra_server_args: Optional[List[str]] = None,
     env_overrides: Optional[Dict[str, str]] = None,
-    ready_timeout: float = 1800.0,
+    ready_timeout: float = 600.0,
     exe: Optional[str] = None,          # Python executable for `-m sglang.launch_server`
     verbose: bool = False,
 ):
@@ -227,19 +227,16 @@ def launch_sglang_client(
         cmd.append("--trust-remote-code")
     if max_model_len:
         cmd += ["--max-model-len", str(max_model_len)]
-    if lora_paths:
+    if lora and lora.name:
         cmd.append("--lora-paths")
-
-        # Iterate over name:path pairs in the dict
-        for name, path in lora_paths.items():
-            # Create the JSON schema that SGLang expects
-            lora_spec = {
-                "lora_name": name,
-                "lora_path": path,
-                "pinned": True
-            }
-            # Append to command as separate args
-            cmd.append(json.dumps(lora_spec))
+        # Create the JSON schema that SGLang expects
+        lora_spec = {
+            "lora_name": lora.name,
+            "lora_path": lora.path,
+            "pinned": True
+        }
+        # Append to command as separate args
+        cmd.append(json.dumps(lora_spec))
     if extra_server_args:
         cmd += list(extra_server_args)
 
@@ -271,14 +268,14 @@ def launch_vllm_client(
     host: str = "127.0.0.1",
     tp: Optional[int] = None,       # tensor parallel (defaults to len(gpus))
     dtype: Optional[str] = None,    # "bfloat16" | "float16" | None (vLLM default; NO 'auto')
-    lora_paths: Optional[str] = None,# if provided: uses --enable-lora --lora-modules default=<path>
+    lora: Optional[str] = None,     # if provided: uses --enable-lora --lora-modules default=<path>
     allow_download: bool = True,
     trust_remote_code: bool = True,
     max_model_len: Optional[int] = None,       # --max-model-len
     served_model_name: Optional[str] = None,   # --served-model-name (optional)
     extra_server_args: Optional[List[str]] = None,
     env_overrides: Optional[Dict[str, str]] = None,
-    ready_timeout: float = 1800.0,
+    ready_timeout: float = 600.0,
     exe: Optional[str] = None,      # path to `vllm` CLI; defaults to "vllm"
     verbose: bool = False,
 ):
@@ -313,12 +310,12 @@ def launch_vllm_client(
         cmd += ["--dtype", dtype]  # note: vLLM expects explicit dtype or omit entirely
     if max_model_len:
         cmd += ["--max-model-len", str(max_model_len)]
-    if lora_paths:
-        cmd += ["--enable-lora", "--lora-modules"]
+    if lora and lora.name:
+        cmd += [
+            "--enable-lora", "--lora-modules", f"{lora.name}={lora.path}",
+            # "--quantization", "bitsandbytes", "--load-format", "bitsandbytes"
+        ]
 
-        # Iterate over name:path pairs in the dict
-        for name, path in lora_paths.items():
-            cmd.append(f"{name}={path}")
     if extra_server_args:
         cmd += list(extra_server_args)
 
@@ -348,14 +345,14 @@ def build_client(
     host: str = "127.0.0.1",
     tp: Optional[int] = None,
     dtype: str = "auto",
-    lora_paths: Optional[str] = None,
+    lora: Optional[str] = None,
     allow_download: bool = True,
     trust_remote_code: bool = True,
     max_model_len: Optional[int] = None,
     served_model_name: Optional[str] = None,
     extra_server_args: Optional[List[str]] = None,
     env_overrides: Optional[Dict[str, str]] = None,
-    ready_timeout: float = 1800.0,
+    ready_timeout: float = 600.0,
     exe: Optional[str] = None,
     verbose: bool = True,
 ):
@@ -374,7 +371,7 @@ def build_client(
             host=host,
             tp=tp,
             dtype=dtype,
-            lora_paths=lora_paths,
+            lora=lora,
             allow_download=allow_download,
             trust_remote_code=trust_remote_code,
             max_model_len=max_model_len,
@@ -393,7 +390,7 @@ def build_client(
             host=host,
             tp=tp,
             dtype=dtype_for_vllm,
-            lora_paths=lora_paths,
+            lora=lora,
             allow_download=allow_download,
             trust_remote_code=trust_remote_code,
             max_model_len=max_model_len,
