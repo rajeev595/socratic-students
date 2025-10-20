@@ -406,7 +406,7 @@ def main(cfg: DictConfig) -> None:
             str(cfg.teacher.model),
             str(cfg.student.model),
             cfg.experiment.dataset,
-            "sft"
+            f"sft_{cfg.experiment.total_turns}"
         )
         os.makedirs(ckpt_dir_sft, exist_ok=True)
         train_sft(
@@ -446,7 +446,7 @@ def main(cfg: DictConfig) -> None:
             str(cfg.teacher.model),
             str(cfg.student.model),
             cfg.experiment.dataset,
-            "dpo"
+            f"dpo_{cfg.experiment.total_turns}"
         )
         os.makedirs(ckpt_dir_dpo, exist_ok=True)
 
