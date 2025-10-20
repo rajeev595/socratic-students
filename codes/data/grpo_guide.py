@@ -453,7 +453,7 @@ def main(cfg: DictConfig) -> None:
     # Clients
     teacher_name, student_name, guide_name = cfg.teacher.model, cfg.student.model, cfg.guide.model
     teacher_client = build_client(teacher_name, cfg.teacher.gpus, cfg.teacher.server)
-    student_client = build_client(student_name, cfg.student.gpus, cfg.student.server)
+    student_client = build_client(student_name, cfg.student.gpus, cfg.student.server, lora=cfg.student.lora)
     guide_client = build_client(guide_name, cfg.guide.gpus, cfg.guide.server)
     logger.info("Teacher=%s | Student=%s | Guide=%s", teacher_name, student_name, guide_name)
 
@@ -495,7 +495,7 @@ def main(cfg: DictConfig) -> None:
                     # teacher
                     teacher_client, teacher_name, cfg.teacher.temperature,
                     # student
-                    student_client, student_name, cfg.student.temperature,
+                    student_client, cfg.student.lora.name or student_name, cfg.student.temperature,
                     # guide
                     guide_client, guide_name, cfg.guide.temperature,
                     # problems
