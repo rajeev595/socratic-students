@@ -6,11 +6,10 @@ import socket
 import signal
 import atexit
 import logging
+import requests
 import subprocess
 from contextlib import contextmanager
-from typing import List, Optional, Sequence, Dict, Tuple
-
-import requests
+from typing import List, Optional, Sequence, Dict
 
 
 logger = logging.getLogger(__name__)
@@ -52,12 +51,10 @@ _MODEL_ALIASES: Dict[str, str] = {
 
 
 def get_model_name(nickname: str):
-    if "gpt" in nickname:
-        return nickname
-    elif nickname in _MODEL_ALIASES:
+    if nickname in _MODEL_ALIASES:
         return _MODEL_ALIASES[nickname]
     else:
-        raise ValueError(f"{nickname} is NOT valid!")
+        return nickname
 
 
 # ---------------------------
