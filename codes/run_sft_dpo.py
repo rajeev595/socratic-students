@@ -137,7 +137,6 @@ def setup_for_training(
             model.gradient_checkpointing_enable()
 
     # LoRA config (for fresh adapters; if loading an existing adapter later, this can be ignored)
-    from peft import LoraConfig
     peft_cfg = LoraConfig(
         r=lora_r,
         lora_alpha=lora_alpha,
@@ -161,7 +160,7 @@ def get_best_ckpt_dir(root_dir: str) -> str:
         best = st.get("best_model_checkpoint")
         if best and os.path.exists(best):
             return best  # e.g., ".../sft/checkpoint-450"
-    return root_dir  # fallback: last-step export
+    return None  # fallback: last-step export
 
 
 # -----------------------------
@@ -265,7 +264,6 @@ def train_dpo(
     beta: float,
     epochs: int
 ):
-    # IMPORTANT: Disable GC for DPO to avoid re-entrant backward on LoRA params
     model, tokenizer, peft_cfg = setup_for_training(
         tokenizer,
         use_4bit,
