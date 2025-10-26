@@ -4,12 +4,13 @@ datasets
 tqdm
 hydra-core
 omegaconf
-sglang[all]
+vllm
 accelerate
 peft
 trl
 bitsandbytes
 tensorboard
+flash-attn
 
 # App / plotting
 streamlit
