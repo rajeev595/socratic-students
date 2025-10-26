@@ -14,8 +14,8 @@ teacher:
 student:
   model: qwen7
   lora:
-    name: "qwen7_sft"
-    path: "/playpen-ssd2/ambati/interact_plus/experiments/selfguided/qwen72/qwen7/gsm8k/sft_11/checkpoint-180/"
+    name:
+    path:
   temperature: 0.8
   server: "vllm"    # sglang/vllm/hf
   gpus: [4,5,6,7]
@@ -53,8 +53,8 @@ gen:
 train:
   train_size: 0.5
   val_size: 0.2
-  sft_use_4bit: False
-  rlhf_use_4bit: False
+  sft_use_8bit: True
+  rlhf_use_8bit: True
   lora_r: 16
   lora_alpha: 32
   lora_dropout: 0.05

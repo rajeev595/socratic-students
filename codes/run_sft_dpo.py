@@ -56,7 +56,7 @@ def preprocess_sft_example(
 # -----------------------------
 def setup_for_training(
     tokenizer: AutoTokenizer,
-    use_4bit: bool,
+    use_8bit: bool,
     lora_r: int,
     lora_alpha: int,
     lora_dropout: float,
@@ -81,22 +81,24 @@ def setup_for_training(
 
     # BitsAndBytes/QLoRA config (if requested)
     bnb = BitsAndBytesConfig(
-        load_in_4bit=use_4bit,
-        bnb_4bit_use_double_quant=True,
-        bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=torch.bfloat16,
-    ) if use_4bit else None
+        load_in_8bit=use_8bit,
+        bnb_8bit_compute_dtype=torch.bfloat16,
+    ) if use_8bit else None
 
     # Load ON THE SAME DEVICE as this process will train on for 4-bit;
     # for full precision, let TRL/Accelerate place the model later.
     model = AutoModelForCausalLM.from_pretrained(
         tokenizer.name_or_path,
         quantization_config=bnb,
-        device_map=({"": local_rank} if use_4bit else None),
+        device_map=({"": local_rank} if use_8bit else None),
         low_cpu_mem_usage=False,
-        torch_dtype=(torch.bfloat16 if use_4bit else None),
         cache_dir=os.path.join(os.environ["HF_HOME"], "hub")
     )
+
+    try:
+        model.config.attn_implementation = "flash_attention_2"
+    except Exception:
+        pass
 
     # Align token IDs
     if tokenizer.pad_token is None and tokenizer.eos_token is not None:
@@ -111,7 +113,7 @@ def setup_for_training(
     model.generation_config = gen
 
     # Prepare for k-bit training (adds input grad hooks etc.)
-    if use_4bit:
+    if use_8bit:
         model = prepare_model_for_kbit_training(
             model,
             use_gradient_checkpointing=bool(enable_gc),
@@ -171,7 +173,7 @@ def train_sft(
     train_fpath: str,
     val_fpath: str,
     out_dir: str,
-    use_4bit: bool,
+    use_8bit: bool,
     lora_r: int,
     lora_alpha: int,
     lora_dropout: float,
@@ -184,7 +186,7 @@ def train_sft(
     # Enable GC for SFT (usually stable and saves memory)
     model, tokenizer, peft_cfg = setup_for_training(
         tokenizer,
-        use_4bit,
+        use_8bit,
         lora_r,
         lora_alpha,
         lora_dropout,
@@ -253,7 +255,7 @@ def train_dpo(
     val_fpath: str,
     init_adapter_dir: Optional[str],   # pass your SFT adapter dir here to start from SFT
     out_dir: str,
-    use_4bit: bool,
+    use_8bit: bool,
     lora_r: int,
     lora_alpha: int,
     lora_dropout: float,
@@ -266,7 +268,7 @@ def train_dpo(
 ):
     model, tokenizer, peft_cfg = setup_for_training(
         tokenizer,
-        use_4bit,
+        use_8bit,
         lora_r,
         lora_alpha,
         lora_dropout,
@@ -390,14 +392,14 @@ def main(cfg: DictConfig) -> None:
             str(cfg.paths.data),
             str(cfg.teacher.model),
             str(cfg.experiment.dataset),
-            "curriculum",
+            "full",
             f"{cfg.student.model}_cot_sft_iter{cfg.gen.dagger_iter}_train.jsonl" if cfg.experiment.cot else f"{cfg.student.model}_sft_iter{cfg.gen.dagger_iter}_train.jsonl"
         )
         val_fpath_sft = os.path.join(
             str(cfg.paths.data),
             str(cfg.teacher.model),
             str(cfg.experiment.dataset),
-            "curriculum",
+            "full",
             f"{cfg.student.model}_cot_sft_iter{cfg.gen.dagger_iter}_val.jsonl" if cfg.experiment.cot else f"{cfg.student.model}_sft_iter{cfg.gen.dagger_iter}_val.jsonl"
         )
         ckpt_dir_sft = os.path.join(
@@ -414,7 +416,7 @@ def main(cfg: DictConfig) -> None:
             train_fpath=train_fpath_sft,
             val_fpath=val_fpath_sft,
             out_dir=ckpt_dir_sft,
-            use_4bit=cfg.train.sft_use_4bit,
+            use_8bit=cfg.train.sft_use_8bit,
             lora_r=cfg.train.lora_r,
             lora_alpha=cfg.train.lora_alpha,
             lora_dropout=cfg.train.lora_dropout,
@@ -431,14 +433,14 @@ def main(cfg: DictConfig) -> None:
             str(cfg.paths.data),
             str(cfg.teacher.model),
             str(cfg.experiment.dataset),
-            "curriculum",
+            "full",
             f"{cfg.student.model}_cot_dpo_iter{cfg.gen.dagger_iter}_train.jsonl" if cfg.experiment.cot else f"{cfg.student.model}_dpo_iter{cfg.gen.dagger_iter}_train.jsonl"
         )
         val_fpath_dpo = os.path.join(
             str(cfg.paths.data),
             str(cfg.teacher.model),
             str(cfg.experiment.dataset),
-            "curriculum",
+            "full",
             f"{cfg.student.model}_cot_dpo_iter{cfg.gen.dagger_iter}_val.jsonl" if cfg.experiment.cot else f"{cfg.student.model}_dpo_iter{cfg.gen.dagger_iter}_val.jsonl"
         )
 
@@ -459,7 +461,7 @@ def main(cfg: DictConfig) -> None:
             val_fpath=val_fpath_dpo,
             init_adapter_dir=get_best_ckpt_dir(ckpt_dir_sft),
             out_dir=ckpt_dir_dpo,
-            use_4bit=cfg.train.rlhf_use_4bit,
+            use_8bit=cfg.train.rlhf_use_8bit,
             lora_r=cfg.train.lora_r,
             lora_alpha=cfg.train.lora_alpha,
             lora_dropout=cfg.train.lora_dropout,
