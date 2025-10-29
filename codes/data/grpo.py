@@ -18,7 +18,7 @@ from codes.prompts.utils import _select_sys_prompt, _problem_greeting
 from codes.run_interact import interact, evaluate, get_assessment
 from codes.utils.llm.server import build_client
 from codes.utils.vars import set_envs
-from codes.utils.file_ops import save_json_atomic, load_json_resilient
+from codes.utils.file_ops import load_json_resilient
 
 
 logger = logging.getLogger(__name__)
@@ -127,7 +127,9 @@ def run_problem(
         cur_start = 1
         logger.warning(f"[{pid}] resume requested but no transcript found; starting fresh")
 
-    pairs, chosen_list, grpo_groups = [], [], []
+    pairs: List[Dict[str, Any]] = []
+    chosen_list: List[Dict[str, Any]] = []
+    grpo_groups: List[Dict[str, Any]] = []
 
     # --- Baseline reuse cache across turns ---
     # pass@k dict corresponding to the EXACT 'texts' at the *start* of a turn.
@@ -140,9 +142,12 @@ def run_problem(
         if assessment_turn > 0 and turn == assessment_turn and len(texts) > 0:
             texts[-1] += get_assessment(
                 data_type=data_type,
-                client=student_client,
-                model_name=student_name,
+                student_client=student_client,
+                student_name=student_name,
                 student_temperature=student_temperature,
+                teacher_client=teacher_client,
+                teacher_name=teacher_name,
+                teacher_temperature=teacher_temperature,
                 problem_dict=interaction_problem,
                 texts=texts,
             )
@@ -209,7 +214,7 @@ def run_problem(
             base_scores = {}
 
         # ---- Evaluate each (student Q, teacher A) pair (current scores only)
-        pass_at_k_scores_current = []
+        pass_at_k_scores_current: List[Dict[Any, float]] = []
         for student_reply, teacher_reply in zip(student_replies, teacher_replies):
             # current: history + candidate Q/A
             convo_current = msgs_to_string(texts + [student_reply, teacher_reply])
@@ -231,11 +236,6 @@ def run_problem(
             total_student_prompt_tks += p_tks
             total_student_completion_tks += c_tks
 
-        # Build a per-candidate baseline list (same baseline for all candidates this turn)
-        pass_at_k_scores_baseline = (
-            [base_scores for _ in range(len(student_replies))] if use_delta_reward else [{} for _ in range(len(student_replies))]
-        )
-
         # ---- Prompt messages used to elicit candidate questions
         sys_prompt = _select_sys_prompt(data_type, use_cot, True, evaluation_problem)
         prompt_messages = [{"role": "system", "content": sys_prompt}] + format_messages(
@@ -254,19 +254,19 @@ def run_problem(
             "candidates": [],
         }
 
-        for reply, cur_scores, base_scores_i in zip(student_replies, pass_at_k_scores_current, pass_at_k_scores_baseline):
+        for reply, cur_scores in zip(student_replies, pass_at_k_scores_current):
             q_text = _extract_text(reply)
 
             # reward definition
             if use_delta_reward:
-                reward = _get_score(cur_scores, pass_k) - _get_score(base_scores_i, pass_k)
+                reward = _get_score(cur_scores, pass_k) - _get_score(base_scores, pass_k)
             else:
                 reward = _get_score(cur_scores, pass_k)
 
             # metrics payloads
             metrics_current = {int(k) if str(k).isdigit() else k: float(v) for k, v in cur_scores.items()}
             metrics_baseline = (
-                {int(k) if str(k).isdigit() else k: float(v) for k, v in base_scores_i.items()}
+                {int(k) if str(k).isdigit() else k: float(v) for k, v in base_scores.items()}
                 if use_delta_reward else {}
             )
             metrics_delta = (
@@ -321,10 +321,10 @@ def run_problem(
         # ---- DPO pair mining (now delta-aware and hard-negative friendly)
         # Build list of candidates with margins vs best
         deltas_for_pairs = []
+        best_val = _get_score(best_pass_at_k_score, pass_k)
         for score_cur, reply in zip(pass_at_k_scores_current, student_replies):
             if reply is chosen:
                 continue
-            best_val = _get_score(best_pass_at_k_score, pass_k)
             cur_val = _get_score(score_cur, pass_k)
             margin = best_val - cur_val
             deltas_for_pairs.append((margin, reply, score_cur))
@@ -381,10 +381,8 @@ def run_problem(
         chosen_list,
         pairs,
         grpo_groups,
-        total_teacher_prompt_tks,
-        total_teacher_completion_tks,
-        total_student_prompt_tks,
-        total_student_completion_tks
+        total_teacher_prompt_tks, total_teacher_completion_tks,
+        total_student_prompt_tks, total_student_completion_tks
     )
 
 # -------------------------
@@ -462,7 +460,7 @@ def main(cfg: DictConfig) -> None:
     logger.info(f"Loading interaction problems: {problems_fpath}")
     data = load_json_resilient(problems_fpath)
     interaction_problems: List[Dict[str, Any]] = [
-        p for p in data if p["id"] not in existing_pids
+        p for p in data if p["id"] not in existing_pids and str(p["id"]) not in existing_pids
     ][: max(0, cfg.data.data_amount - len(existing_pids))]
     logger.info(f"Interaction problems: finished {len(existing_pids)} | pending {len(interaction_problems)}")
 

@@ -162,29 +162,50 @@ def run_problem(
 
         # ---- Candidate generation: student + guide
         student_replies, sp_tks, sc_tks = interact(
-            True, texts, interaction_problem, rlhf_samples_student,
-            data_type, student_client, student_name, student_temperature, use_cot
+            True, 
+            texts, 
+            interaction_problem, 
+            rlhf_samples_student,
+            data_type, 
+            student_client, 
+            student_name, 
+            student_temperature, 
+            use_cot
         )
         total_student_prompt_tks += sp_tks
         total_student_completion_tks += sc_tks
 
         guide_replies, gp_tks, gc_tks = interact(
-            True, texts, interaction_problem, rlhf_samples_guide,
-            data_type, guide_client, guide_name, guide_temperature, use_cot
+            True, 
+            texts, 
+            interaction_problem, 
+            rlhf_samples_guide,
+            data_type, 
+            guide_client, 
+            guide_name, 
+            guide_temperature, 
+            use_cot
         )
         total_guide_prompt_tks += gp_tks
         total_guide_completion_tks += gc_tks
 
         # Label sources and concatenate
-        # Each element: (reply_msg, "student"/"guide")
+        # Each element: (student_reply, "student"/"guide")
         candidates = [(r, "student") for r in student_replies] + [(r, "guide") for r in guide_replies]
 
         # ---- Teacher answers for each candidate
         teacher_replies = []
-        for reply_msg, _src in candidates:
+        for student_reply, _src in candidates:
             teacher_reply, tp_tks, tc_tks = interact(
-                False, texts + [reply_msg], interaction_problem, 1,
-                data_type, teacher_client, teacher_name, teacher_temperature, use_cot
+                False, 
+                texts + [student_reply], 
+                interaction_problem, 
+                1,
+                data_type, 
+                teacher_client, 
+                teacher_name, 
+                teacher_temperature, 
+                use_cot
             )
             teacher_replies.append(teacher_reply[0])
             total_teacher_prompt_tks += tp_tks
@@ -196,7 +217,7 @@ def run_problem(
                 base_scores = last_baseline_scores
             else:
                 convo_baseline = msgs_to_string(texts)
-                base_raw, _, pb, cb = evaluate(
+                base_scores_raw, _, pb, cb = evaluate(
                     prev_convo=convo_baseline,
                     data_type=data_type,
                     student_client=student_client,
@@ -210,17 +231,18 @@ def run_problem(
                     num_samples=num_samples,
                     is_ood=is_ood,
                 )
-                base_scores = _to_float_dict(base_raw)
+                base_scores = _to_float_dict(base_scores_raw)
                 total_student_prompt_tks += pb
                 total_student_completion_tks += cb
         else:
             base_scores = {}
 
         # ---- Evaluate each (candidate Q, teacher A)
-        pass_k_current_list: List[Dict[Any, float]] = []
-        for (reply_msg, _src), tr in zip(candidates, teacher_replies):
-            convo_current = msgs_to_string(texts + [reply_msg, tr])
-            cur_scores_raw, _, p_tks, c_tks = evaluate(
+        pass_at_k_scores_current: List[Dict[Any, float]] = []
+        for (reply_msg, _src), teacher_reply in zip(candidates, teacher_replies):
+            # current: history + candidate Q/A
+            convo_current = msgs_to_string(texts + [reply_msg, teacher_reply])
+            cur_scores, _, p_tks, c_tks = evaluate(
                 prev_convo=convo_current,
                 data_type=data_type,
                 student_client=student_client,
@@ -234,7 +256,7 @@ def run_problem(
                 num_samples=num_samples,
                 is_ood=is_ood,
             )
-            pass_k_current_list.append(_to_float_dict(cur_scores_raw))
+            pass_at_k_scores_current.append(_to_float_dict(cur_scores))
             total_student_prompt_tks += p_tks
             total_student_completion_tks += c_tks
 
@@ -245,6 +267,7 @@ def run_problem(
         # ---------- GRPO group ----------
         group = {
             "ex_id": pid,
+            "problem": evaluation_problem,
             "turn": turn,
             "prompt_messages": prompt_messages,
             "prompt_type": "messages",
@@ -253,7 +276,7 @@ def run_problem(
             "candidates": [],
         }
         # same baseline for all cands in this turn if enabled
-        for (reply_msg, src), cur_scores in zip(candidates, pass_k_current_list):
+        for (reply_msg, src), cur_scores in zip(candidates, pass_at_k_scores_current):
             q_text = _extract_text(reply_msg)
             if use_delta_reward:
                 reward = _get_score(cur_scores, pass_k) - _get_score(base_scores, pass_k)
@@ -280,10 +303,10 @@ def run_problem(
         # --------------------------------
 
         # ---- Choose best by CURRENT pass@k to roll convo
-        current_vals = [_get_score(s, pass_k) for s in pass_k_current_list] if pass_k_current_list else [0.0]
+        current_vals = [_get_score(s, pass_k) for s in pass_at_k_scores_current]
         max_value = max(current_vals) if current_vals else 0.0
         best_idx = current_vals.index(max_value) if current_vals else 0
-        best_pass_at_k_score = pass_k_current_list[best_idx] if pass_k_current_list else {}
+        best_pass_at_k_score = pass_at_k_scores_current[best_idx] if pass_at_k_scores_current else {}
         # hstack the reply+teacher chosen to continue
         appended_idx = best_idx
         if random.random() < 1 - eps:
@@ -295,31 +318,33 @@ def run_problem(
             texts += [candidates[idx][0], teacher_replies[idx]]
             appended_idx = idx
             propensity = eps / max(1, len(candidates))
-        chosen_reply = candidates[best_idx][0]
+
+        # SFT item
+        chosen = candidates[best_idx][0]
 
         # ---- SFT gating (quality)
         if max_value >= 0.85:
             chosen_list.append({
                 "prompt": prompt_messages,
-                "response": chosen_reply,
+                "response": chosen,
                 "problem": evaluation_problem,
                 "turn": turn,
                 "propensity": propensity
             })
 
         # ---- DPO pairs (margin band + optional capping)
-        margins: List[Tuple[float, Any, Dict[Any, float]]] = []
+        deltas_for_pairs = []
         best_val = _get_score(best_pass_at_k_score, pass_k)
-        for idx, ((reply_msg, _src), cur_scores) in enumerate(zip(candidates, pass_k_current_list)):
-            if idx == best_idx:
+        for idx, ((reply, _src), cur_scores) in enumerate(zip(candidates, pass_at_k_scores_current)):
+            if reply is chosen:
                 continue
             cur_val = _get_score(cur_scores, pass_k)
             margin = best_val - cur_val
-            margins.append((margin, reply_msg, cur_scores))
+            deltas_for_pairs.append((margin, reply, cur_scores))
 
         min_m = dpo_margin_min if dpo_margin_min is not None else 0.05
         max_m = dpo_margin_max if dpo_margin_max is not None else 1.0
-        filtered = [(m, r, s) for (m, r, s) in margins if (m >= min_m and m <= max_m)]
+        filtered = [(m, r, s) for (m, r, s) in deltas_for_pairs if (m >= min_m and m <= max_m)]
 
         if dpo_max_pairs_per_turn is not None and len(filtered) > dpo_max_pairs_per_turn:
             filtered.sort(key=lambda x: x[0])  # harder (smaller margin) first
@@ -343,7 +368,7 @@ def run_problem(
 
             pairs.append({
                 "prompt": prompt_messages,
-                "chosen_response": chosen_reply,
+                "chosen_response": chosen,
                 "rejected_response": rejected_reply,
                 "chosen_reward": chosen_reward_dict,
                 "rejected_reward": rejected_reward_dict,
@@ -352,8 +377,8 @@ def run_problem(
             })
 
         # ---- Prepare baseline for next turn (the branch we actually appended)
-        if use_delta_reward and pass_k_current_list:
-            last_baseline_scores = pass_k_current_list[appended_idx] or {}
+        if use_delta_reward and pass_at_k_scores_current:
+            last_baseline_scores = pass_at_k_scores_current[appended_idx] or {}
             last_baseline_valid = True
 
         logger.debug(f'pid-{evaluation_problem["id"]} turn-{turn} best pass@{pass_k}={_get_score(best_pass_at_k_score, pass_k):.3f}')
@@ -383,10 +408,9 @@ def main(cfg: DictConfig) -> None:
 
     # Prefer same naming convention as your rlhf_guide (student_guide_*)
     def _fname(stem: str, ext: str) -> str:
-        tag_cot = "_cot" if cfg.experiment.cot else ""
         return os.path.join(
-            base_dir,
-            f"{cfg.student.model}_{cfg.guide.model}{tag_cot}_{stem}__iter{cfg.gen.dagger_iter}_{cfg.data.split}.{ext}"
+            base_dir, "full",
+            f"{cfg.student.model}__{cfg.guide.model}__{stem}_iter{cfg.gen.dagger_iter}_{cfg.data.split}.{ext}"
         )
 
     fpath_sft = _fname("sft", "jsonl")
@@ -446,7 +470,7 @@ def main(cfg: DictConfig) -> None:
         logger.info(f"Loading evaluation (OOD) problems: {ood_problems_path}")
         data = load_json_resilient(ood_problems_path)
         evaluation_problems = [
-            p for p in data if p["id"] not in existing_pids
+            p for p in data if p["id"] not in existing_pids and str(p["id"]) not in existing_pids
         ][: max(0, cfg.data.data_amount - len(existing_pids))]
         logger.info(f"Evaluation (OOD) problems: finished {len(existing_pids)} | pending {len(evaluation_problems)}")
 
@@ -471,8 +495,8 @@ def main(cfg: DictConfig) -> None:
         dpo_max_pairs_per_turn = int(dpo_max_pairs_per_turn)
 
     # K per source (defaults: both = cfg.gen.rlhf_samples)
-    rlhf_samples_student = int(getattr(cfg.gen, "rlhf_samples_student", getattr(cfg.gen, "rlhf_samples", 4)))
-    rlhf_samples_guide = int(getattr(cfg.gen, "rlhf_samples_guide", getattr(cfg.gen, "rlhf_samples", 4)))
+    rlhf_samples_student = int(getattr(cfg.gen, "rlhf_samples_student", getattr(cfg.gen, "rlhf_samples", 5)))
+    rlhf_samples_guide = int(getattr(cfg.gen, "rlhf_samples_guide", getattr(cfg.gen, "rlhf_samples", 5)))
 
     # Token tallies
     total_teacher_prompt_tks = total_teacher_completion_tks = 0
