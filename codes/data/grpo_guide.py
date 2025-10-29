@@ -409,7 +409,7 @@ def main(cfg: DictConfig) -> None:
     # Prefer same naming convention as your rlhf_guide (student_guide_*)
     def _fname(stem: str, ext: str) -> str:
         return os.path.join(
-            base_dir, "full",
+            base_dir, "rlhf",
             f"{cfg.student.model}__{cfg.guide.model}__{stem}_iter{cfg.gen.dagger_iter}_{cfg.data.split}.{ext}"
         )
 

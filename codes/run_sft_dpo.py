@@ -385,7 +385,7 @@ def main(cfg: DictConfig) -> None:
     tokenizer.padding_side = "right"
     tokenizer.truncation_side = "right"
 
-    root = os.path.join(str(cfg.paths.data), str(cfg.teacher.model), str(cfg.experiment.dataset), "full")
+    root = os.path.join(str(cfg.paths.data), str(cfg.teacher.model), str(cfg.experiment.dataset), "rlhf")
     base_ckpt = os.path.join(
         str(cfg.paths.experiments), str(cfg.experiment.name),
         str(cfg.teacher.model), str(cfg.student.model),
