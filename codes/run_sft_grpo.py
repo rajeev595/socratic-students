@@ -514,80 +514,86 @@ def main(cfg: DictConfig) -> None:
     tokenizer.padding_side = "right"
     tokenizer.truncation_side = "right"
 
-    root = os.path.join(str(cfg.paths.data), str(cfg.teacher.model), str(cfg.experiment.dataset))
-
-    # ---- SFT paths ----
-    train_fpath_sft = os.path.join(
-        root,
-        f"{cfg.student.model}_cot_sft_iter{cfg.gen.dagger_iter}_train.jsonl"
-        if cfg.experiment.cot else
-        f"{cfg.student.model}_sft_iter{cfg.gen.dagger_iter}_train.jsonl"
-    )
-    val_fpath_sft = os.path.join(
-        root,
-        f"{cfg.student.model}_cot_sft_iter{cfg.gen.dagger_iter}_val.jsonl"
-        if cfg.experiment.cot else
-        f"{cfg.student.model}_sft_iter{cfg.gen.dagger_iter}_val.jsonl"
-    )
-
-    # ---- GRPO paths ----
-    train_fpath_grpo = os.path.join(
-        root,
-        f"{cfg.student.model}_cot_grpo_iter{cfg.gen.dagger_iter}_train.jsonl"
-        if cfg.experiment.cot else
-        f"{cfg.student.model}_grpo_iter{cfg.gen.dagger_iter}_train.jsonl"
-    )
-    val_fpath_grpo = os.path.join(
-        root,
-        f"{cfg.student.model}_cot_grpo_iter{cfg.gen.dagger_iter}_val.jsonl"
-        if cfg.experiment.cot else
-        f"{cfg.student.model}_grpo_iter{cfg.gen.dagger_iter}_val.jsonl"
-    )
-
-    # ---- ckpt dirs ----
+    root = os.path.join(str(cfg.paths.data), str(cfg.teacher.model), str(cfg.experiment.dataset), "full")
     base_ckpt = os.path.join(
         str(cfg.paths.experiments), str(cfg.experiment.name),
         str(cfg.teacher.model), str(cfg.student.model),
         cfg.experiment.dataset
     )
-    ckpt_dir_sft  = os.path.join(base_ckpt, "sft");  os.makedirs(ckpt_dir_sft,  exist_ok=True)
-    ckpt_dir_grpo = os.path.join(base_ckpt, "grpo"); os.makedirs(ckpt_dir_grpo, exist_ok=True)
 
-    # # ---- Run SFT ----
-    # train_sft(
-    #     tokenizer=tokenizer,
-    #     train_fpath=train_fpath_sft,
-    #     val_fpath=val_fpath_sft,
-    #     out_dir=ckpt_dir_sft,
-    #     use_4bit=cfg.train.sft_use_4bit,
-    #     lora_r=cfg.train.lora_r,
-    #     lora_alpha=cfg.train.lora_alpha,
-    #     lora_dropout=cfg.train.lora_dropout,
-    #     batch_size=cfg.train.sft_batch_size,
-    #     grad_accum=cfg.train.grad_accum,
-    #     lr=cfg.train.sft_lr,
-    #     epochs=cfg.train.sft_epochs
-    # )
+    # SFT
+    ckpt_dir_sft = None
+    if cfg.train.sft_epochs > 0:
+        train_fpath_sft, val_fpath_sft = [], []
+        for i in range(cfg.gen.dagger_iter + 1):
+            if "self" in cfg.experiment.name:
+                train_fpath = os.path.join(root, f"{cfg.student.model}_sft_iter{i}_train.jsonl")
+                val_fpath = os.path.join(root, f"{cfg.student.model}_sft_iter{i}_val.jsonl")
 
-    # ---- Run GRPO (init from SFT) ----
-    train_grpo(
-        tokenizer=tokenizer,
-        train_fpath=train_fpath_grpo,
-        val_fpath=val_fpath_grpo,
-        init_adapter_dir=ckpt_dir_sft,
-        out_dir=ckpt_dir_grpo,
-        use_4bit=cfg.train.rlhf_use_4bit,
-        lora_r=cfg.train.lora_r,
-        lora_alpha=cfg.train.lora_alpha,
-        lora_dropout=cfg.train.lora_dropout,
-        batch_size_groups=getattr(cfg.train, "grpo_batch_size_groups", 2),
-        grad_accum=cfg.train.grad_accum,
-        lr=getattr(cfg.train, "grpo_lr", 5e-6),
-        epochs=getattr(cfg.train, "grpo_epochs", 1),
-        tau=getattr(cfg.train, "grpo_tau", 0.7),
-        reward_norm=getattr(cfg.train, "grpo_reward_norm", "zscore"),
-        kl_coeff=getattr(cfg.train, "grpo_kl_coeff", 0.02),
-    )
+            if "peer" in cfg.experiment.name:
+                train_fpath = os.path.join(root, f"{cfg.student.model}__{cfg.guide.model}__sft_iter{i}_train.jsonl")
+                val_fpath = os.path.join(root, f"{cfg.student.model}__{cfg.guide.model}__sft_iter{i}_val.jsonl")
+            
+            train_fpath_sft.append(train_fpath)
+            val_fpath_sft.append(val_fpath)
+
+        ckpt_dir_sft = os.path.join(
+            base_ckpt, 
+            f"sft_{cfg.gen.dagger_iter}"
+        )
+        os.makedirs(ckpt_dir_sft, exist_ok=True)
+        train_sft(
+            tokenizer=tokenizer,
+            train_fpath=train_fpath_sft,
+            val_fpath=val_fpath_sft,
+            out_dir=ckpt_dir_sft,
+            use_4bit=cfg.train.sft_use_4bit,
+            lora_r=cfg.train.lora_r,
+            lora_alpha=cfg.train.lora_alpha,
+            lora_dropout=cfg.train.lora_dropout,
+            batch_size=cfg.train.sft_batch_size,
+            grad_accum=cfg.train.grad_accum,
+            lr=cfg.train.sft_lr,
+            epochs=cfg.train.sft_epochs
+        )
+
+    # GRPO
+    if cfg.train.grpo_epochs > 0:
+        train_fpath_grpo, val_fpath_grpo = [], []
+        for i in range(cfg.gen.dagger_iter + 1):
+            if "self" in cfg.experiment.name:
+                train_fpath = os.path.join(root, f"{cfg.student.model}_grpo_iter{i}_train.jsonl")
+                val_fpath = os.path.join(root, f"{cfg.student.model}_grpo_iter{i}_val.jsonl")
+
+            if "peer" in cfg.experiment.name:
+                train_fpath = os.path.join(root, f"{cfg.student.model}__{cfg.guide.model}__grpo_iter{i}_train.jsonl")
+                val_fpath = os.path.join(root, f"{cfg.student.model}__{cfg.guide.model}__grpo_iter{i}_val.jsonl")
+            
+            train_fpath_grpo.append(train_fpath)
+            val_fpath_grpo.append(val_fpath)
+
+        ckpt_dir_grpo = os.path.join(
+            base_ckpt, f"grpo_{cfg.gen.dagger_iter}"
+        )
+        os.makedirs(ckpt_dir_grpo, exist_ok=True)
+        train_grpo(
+            tokenizer=tokenizer,
+            train_fpath=train_fpath_grpo,
+            val_fpath=val_fpath_grpo,
+            init_adapter_dir=ckpt_dir_sft,
+            out_dir=ckpt_dir_grpo,
+            use_4bit=cfg.train.rlhf_use_4bit,
+            lora_r=cfg.train.lora_r,
+            lora_alpha=cfg.train.lora_alpha,
+            lora_dropout=cfg.train.lora_dropout,
+            batch_size_groups=getattr(cfg.train, "grpo_batch_size_groups", 2),
+            grad_accum=cfg.train.grad_accum,
+            lr=getattr(cfg.train, "grpo_lr", 5e-6),
+            epochs=getattr(cfg.train, "grpo_epochs", 1),
+            tau=getattr(cfg.train, "grpo_tau", 0.7),
+            reward_norm=getattr(cfg.train, "grpo_reward_norm", "zscore"),
+            kl_coeff=getattr(cfg.train, "grpo_kl_coeff", 0.02),
+        )
 
     elapsed = time.perf_counter() - start_time
     logger.info("Total time elapsed: %s", timedelta(seconds=int(elapsed)))
