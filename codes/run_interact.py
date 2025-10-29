@@ -393,7 +393,7 @@ def main(cfg: DictConfig) -> None:
         dataset,
     )
     os.makedirs(exp_dir, exist_ok=True)
-    transcripts_dir = os.path.join(exp_dir, "transcripts")
+    transcripts_dir = os.path.join(exp_dir, f"transcripts_{cfg.gen.dagger_iter}")
     os.makedirs(transcripts_dir, exist_ok=True)
 
     # Collect results across problems for aggregation
@@ -401,7 +401,7 @@ def main(cfg: DictConfig) -> None:
     all_results = {}
 
     # Load existing results
-    results_fpath = os.path.join(exp_dir, "itemized_results.json")
+    results_fpath = os.path.join(exp_dir, f"itemized_results_{cfg.gen.dagger_iter}.json")
     if os.path.exists(results_fpath):
         all_results = load_json_resilient(results_fpath)
         for _, example in all_results.items():
@@ -521,7 +521,7 @@ def main(cfg: DictConfig) -> None:
 
     # compute bootstrapped aggregate results
     avg_results = bootstrap_aggregate(all_results)
-    save_json_atomic(os.path.join(exp_dir, "aggregate_results.json"), avg_results)
+    save_json_atomic(os.path.join(exp_dir, f"aggregate_results_{cfg.gen.dagger_iter}.json"), avg_results)
 
     # Log aggregate summary
     for turn in sorted(avg_results.keys()):
