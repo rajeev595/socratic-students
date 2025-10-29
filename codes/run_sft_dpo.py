@@ -385,30 +385,32 @@ def main(cfg: DictConfig) -> None:
     tokenizer.padding_side = "right"
     tokenizer.truncation_side = "right"
 
+    root = os.path.join(str(cfg.paths.data), str(cfg.teacher.model), str(cfg.experiment.dataset), "full")
+    base_ckpt = os.path.join(
+        str(cfg.paths.experiments), str(cfg.experiment.name),
+        str(cfg.teacher.model), str(cfg.student.model),
+        cfg.experiment.dataset
+    )
+
     # SFT
     ckpt_dir_sft = None
     if cfg.train.sft_epochs > 0:
-        train_fpath_sft = os.path.join(
-            str(cfg.paths.data),
-            str(cfg.teacher.model),
-            str(cfg.experiment.dataset),
-            "full",
-            f"{cfg.student.model}_cot_sft_iter{cfg.gen.dagger_iter}_train.jsonl" if cfg.experiment.cot else f"{cfg.student.model}_sft_iter{cfg.gen.dagger_iter}_train.jsonl"
-        )
-        val_fpath_sft = os.path.join(
-            str(cfg.paths.data),
-            str(cfg.teacher.model),
-            str(cfg.experiment.dataset),
-            "full",
-            f"{cfg.student.model}_cot_sft_iter{cfg.gen.dagger_iter}_val.jsonl" if cfg.experiment.cot else f"{cfg.student.model}_sft_iter{cfg.gen.dagger_iter}_val.jsonl"
-        )
+        train_fpath_sft, val_fpath_sft = [], []
+        for i in range(cfg.gen.dagger_iter + 1):
+            if "self" in cfg.experiment.name:
+                train_fpath = os.path.join(root, f"{cfg.student.model}_sft_iter{i}_train.jsonl")
+                val_fpath = os.path.join(root, f"{cfg.student.model}_sft_iter{i}_val.jsonl")
+
+            if "peer" in cfg.experiment.name:
+                train_fpath = os.path.join(root, f"{cfg.student.model}__{cfg.guide.model}__sft_iter{i}_train.jsonl")
+                val_fpath = os.path.join(root, f"{cfg.student.model}__{cfg.guide.model}__sft_iter{i}_val.jsonl")
+            
+            train_fpath_sft.append(train_fpath)
+            val_fpath_sft.append(val_fpath)
+
         ckpt_dir_sft = os.path.join(
-            str(cfg.paths.experiments),
-            str(cfg.experiment.name),
-            str(cfg.teacher.model),
-            str(cfg.student.model),
-            cfg.experiment.dataset,
-            f"sft_{cfg.experiment.total_turns}"
+            base_ckpt, 
+            f"sft_{cfg.gen.dagger_iter}"
         )
         os.makedirs(ckpt_dir_sft, exist_ok=True)
         train_sft(
@@ -429,28 +431,22 @@ def main(cfg: DictConfig) -> None:
 
     # DPO
     if cfg.train.dpo_epochs > 0:
-        train_fpath_dpo = os.path.join(
-            str(cfg.paths.data),
-            str(cfg.teacher.model),
-            str(cfg.experiment.dataset),
-            "full",
-            f"{cfg.student.model}_cot_dpo_iter{cfg.gen.dagger_iter}_train.jsonl" if cfg.experiment.cot else f"{cfg.student.model}_dpo_iter{cfg.gen.dagger_iter}_train.jsonl"
-        )
-        val_fpath_dpo = os.path.join(
-            str(cfg.paths.data),
-            str(cfg.teacher.model),
-            str(cfg.experiment.dataset),
-            "full",
-            f"{cfg.student.model}_cot_dpo_iter{cfg.gen.dagger_iter}_val.jsonl" if cfg.experiment.cot else f"{cfg.student.model}_dpo_iter{cfg.gen.dagger_iter}_val.jsonl"
-        )
+        train_fpath_dpo, val_fpath_dpo = [], []
+        for i in range(cfg.gen.dagger_iter + 1):
+            if "self" in cfg.experiment.name:
+                train_fpath = os.path.join(root, f"{cfg.student.model}_dpo_iter{i}_train.jsonl")
+                val_fpath = os.path.join(root, f"{cfg.student.model}_dpo_iter{i}_val.jsonl")
+
+            if "peer" in cfg.experiment.name:
+                train_fpath = os.path.join(root, f"{cfg.student.model}__{cfg.guide.model}__dpo_iter{i}_train.jsonl")
+                val_fpath = os.path.join(root, f"{cfg.student.model}__{cfg.guide.model}__dpo_iter{i}_val.jsonl")
+
+            train_fpath_dpo.append(train_fpath)
+            val_fpath_dpo.append(val_fpath)
 
         ckpt_dir_dpo = os.path.join(
-            str(cfg.paths.experiments),
-            str(cfg.experiment.name),
-            str(cfg.teacher.model),
-            str(cfg.student.model),
-            cfg.experiment.dataset,
-            f"dpo_{cfg.experiment.total_turns}"
+            base_ckpt,
+            f"dpo_{cfg.gen.dagger_iter}"
         )
         os.makedirs(ckpt_dir_dpo, exist_ok=True)
 
