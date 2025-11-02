@@ -239,7 +239,7 @@ def run_problem(
 
         # ---- Evaluate each (candidate Q, teacher A)
         pass_at_k_scores_current: List[Dict[Any, float]] = []
-        for (reply_msg, _src), teacher_reply in zip(candidates, teacher_replies):
+        for (reply_msg, _), teacher_reply in zip(candidates, teacher_replies):
             # current: history + candidate Q/A
             convo_current = msgs_to_string(texts + [reply_msg, teacher_reply])
             cur_scores, _, p_tks, c_tks = evaluate(
@@ -320,7 +320,7 @@ def run_problem(
             propensity = eps / max(1, len(candidates))
 
         # SFT item
-        chosen = candidates[best_idx][0]
+        chosen, src = candidates[best_idx]
 
         # ---- SFT gating (quality)
         if max_value >= 0.85:
@@ -329,13 +329,14 @@ def run_problem(
                 "response": chosen,
                 "problem": evaluation_problem,
                 "turn": turn,
-                "propensity": propensity
+                "propensity": propensity,
+                "source": src,  # <-- student | guide
             })
 
         # ---- DPO pairs (margin band + optional capping)
         deltas_for_pairs = []
         best_val = _get_score(best_pass_at_k_score, pass_k)
-        for idx, ((reply, _src), cur_scores) in enumerate(zip(candidates, pass_at_k_scores_current)):
+        for idx, (reply, cur_scores) in enumerate(zip(student_replies, pass_at_k_scores_current)):
             if reply is chosen:
                 continue
             cur_val = _get_score(cur_scores, pass_k)
@@ -373,7 +374,8 @@ def run_problem(
                 "chosen_reward": chosen_reward_dict,
                 "rejected_reward": rejected_reward_dict,
                 "problem": evaluation_problem,
-                "turn": turn
+                "turn": turn,
+                "source": src,  # <-- student | guide
             })
 
         # ---- Prepare baseline for next turn (the branch we actually appended)
@@ -405,11 +407,14 @@ def main(cfg: DictConfig) -> None:
     # Output files (include guide in filename to avoid collisions)
     base_dir = os.path.join(str(cfg.paths.data), str(cfg.teacher.model), str(cfg.experiment.dataset))
     split_dir = os.path.join(base_dir, f"splits_{cfg.gen.pass_at_k_threshold}")
+    name = f"rlhf_{cfg.experiment.name}"
 
     # Prefer same naming convention as your rlhf_guide (student_guide_*)
     def _fname(stem: str, ext: str) -> str:
+        os.makedirs(os.path.join(base_dir, name), exist_ok=True)
+
         return os.path.join(
-            base_dir, "rlhf",
+            base_dir, name,
             f"{cfg.student.model}__{cfg.guide.model}__{stem}_iter{cfg.gen.dagger_iter}_{cfg.data.split}.{ext}"
         )
 

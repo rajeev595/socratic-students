@@ -396,25 +396,24 @@ def main(cfg: DictConfig) -> None:
     set_envs(cfg.paths.openai_api_key_fpath, cfg.paths.hf_home)
 
     # Output files (SFT, DPO, GRPO)
-    fpath_sft = os.path.join(
+    base_dir = os.path.join(
         str(cfg.paths.data),
         str(cfg.teacher.model),
         str(cfg.experiment.dataset),
-        "rlhf",
+    )
+    name = f"rlhf_{cfg.experiment.name}"
+    os.makedirs(os.path.join(base_dir, name), exist_ok=True)
+
+    fpath_sft = os.path.join(
+        base_dir, name,
         f"{cfg.student.model}_cot_sft_iter{cfg.gen.dagger_iter}_{cfg.data.split}.jsonl" if cfg.experiment.cot else f"{cfg.student.model}_sft_iter{cfg.gen.dagger_iter}_{cfg.data.split}.jsonl"
     )
     fpath_dpo = os.path.join(
-        str(cfg.paths.data),
-        str(cfg.teacher.model),
-        str(cfg.experiment.dataset),
-        "rlhf",
+        base_dir, name,
         f"{cfg.student.model}_cot_dpo_iter{cfg.gen.dagger_iter}_{cfg.data.split}.jsonl" if cfg.experiment.cot else f"{cfg.student.model}_dpo_iter{cfg.gen.dagger_iter}_{cfg.data.split}.jsonl"
     )
     fpath_grpo = os.path.join(
-        str(cfg.paths.data),
-        str(cfg.teacher.model),
-        str(cfg.experiment.dataset),
-        "rlhf",
+        base_dir, name,
         f"{cfg.student.model}_cot_grpo_iter{cfg.gen.dagger_iter}_{cfg.data.split}.jsonl" if cfg.experiment.cot else f"{cfg.student.model}_grpo_iter{cfg.gen.dagger_iter}_{cfg.data.split}.jsonl"
     )
 
@@ -451,9 +450,7 @@ def main(cfg: DictConfig) -> None:
 
     # Problems
     problems_fpath = os.path.join(
-        str(cfg.paths.data),
-        str(cfg.teacher.model),
-        str(cfg.experiment.dataset),
+        base_dir,
         f"splits_{cfg.gen.pass_at_k_threshold}",
         f"{cfg.student.model}_{cfg.data.split}.json",
     )
@@ -468,9 +465,7 @@ def main(cfg: DictConfig) -> None:
     evaluation_problems = interaction_problems
     if cfg.experiment.ood:
         ood_problems_path = os.path.join(
-            str(cfg.paths.data),
-            str(cfg.teacher.model),
-            str(cfg.experiment.dataset),
+            base_dir,
             f"splits_{cfg.gen.pass_at_k_threshold}",
             f"{cfg.student.model}_ood_{cfg.data.split}.json",
         )
