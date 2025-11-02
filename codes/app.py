@@ -29,7 +29,7 @@ class TranscriptEntry(TypedDict, total=False):
     content: str
 
 # Project dir
-PROJ_DIR = "/playpen-hdd/ambati/interact_plus/"
+PROJ_DIR = "/playpen-ssd2/ambati/interact_plus/"
 
 # Experiment and data dir
 DEFAULT_EXP_ROOT = str(Path(PROJ_DIR) / "experiments")
@@ -188,6 +188,124 @@ def load_transcript(exp_dir: str, teacher: str, student: str, dataset: str, pid:
     except Exception:
         return None
 
+@st.cache_data(show_spinner=False, ttl=10)
+def load_itemized(exp_dir: str, method: str, teacher: str, student: str, dataset: str) -> Optional[dict]:
+    p = Path(exp_dir) / method / teacher / student / dataset / "itemized_results.json"
+    if not p.exists():
+        return None
+    try:
+        with p.open("r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+@st.cache_data(show_spinner=False, ttl=10)
+def load_itemized_experiment(exp_dir: str, teacher: str, student: str, dataset: str) -> Optional[dict]:
+    """
+    Load itemized results from experiments/<experiment>/<teacher>/<student>/<dataset>/itemized_results.json
+    (No method subdirectory.)
+    """
+    p = Path(exp_dir) / teacher / student / dataset / "itemized_results.json"
+    if not p.exists():
+        return None
+    try:
+        with p.open("r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+def get_pid_list(itemized: dict) -> List[str]:
+    return sorted(itemized.keys(), key=lambda x: (not str(x).isdigit(), int(x) if str(x).isdigit() else str(x)))
+
+def pass_at_k(itemized: dict, pid: str, turn: int, k: int) -> Optional[float]:
+    try:
+        return float(itemized[str(pid)]["results"][str(turn)][str(k)])
+    except Exception:
+        return None
+
+def discover_methods_for_experiment(exp_root: str, experiment: str, teacher: str, student: str, dataset: str) -> List[str]:
+    base = Path(exp_root) / experiment
+    if not base.exists():
+        return []
+    out = []
+    for mdir in sorted([p for p in base.iterdir() if p.is_dir()], key=lambda x: x.name):
+        f = mdir / student / dataset / "itemized_results.json"
+        if f.exists():
+            out.append(mdir.name)
+    return out
+
+def collect_methods_across_selected(
+    exp_root: str,
+    selected_experiments: List[str],
+    teacher: str,
+    student: str,
+    dataset: str,
+) -> Dict[str, List[str]]:
+    """
+    Return {method_name: [experiment1, experiment2, ...]} for which
+    experiments contain <method>/<teacher>/<student>/<dataset>/itemized_results.json.
+    """
+    method2exps: Dict[str, List[str]] = {}
+    for exp in selected_experiments:
+        ms = discover_methods_for_experiment(exp_root, exp, teacher, student, dataset)
+        for m in ms:
+            method2exps.setdefault(m, []).append(exp)
+    return method2exps
+
+def build_delta_table(
+    base_exp_dir: str,
+    cmp_exp_dir: str,
+    teacher: str,
+    student: str,
+    dataset: str,
+    k: int,
+    turn: int,
+    threshold: float = 1.0,
+) -> pd.DataFrame:
+    """
+    Cross-experiment Δ table (experiment == method).
+      baseline from base_exp_dir
+      compare  from cmp_exp_dir
+    """
+    base = load_itemized_experiment(base_exp_dir, teacher, student, dataset)
+    meth = load_itemized_experiment(cmp_exp_dir,  teacher, student, dataset)
+    if base is None or meth is None:
+        return pd.DataFrame(columns=["pid","baseline_pass","method_pass","delta","bucket"])
+
+    pids = sorted(set(get_pid_list(base)) & set(get_pid_list(meth)),
+                  key=lambda x: int(x) if str(x).isdigit() else str(x))
+    rows = []
+    for pid in pids:
+        b = pass_at_k(base, pid, turn, k)
+        m = pass_at_k(meth, pid, turn, k)
+        if b is None or m is None:
+            continue
+        d = m - b
+        if d >= threshold:
+            bucket = "Improved"
+        elif d <= -threshold:
+            bucket = "Regressed"
+        else:
+            bucket = "Unchanged"
+        rows.append({
+            "pid": str(pid),
+            "baseline_pass": b,
+            "method_pass": m,
+            "delta": d,
+            "bucket": bucket,
+        })
+    if not rows:
+        return pd.DataFrame(columns=["pid","baseline_pass","method_pass","delta","bucket"])
+    return pd.DataFrame(rows).sort_values(["bucket","delta","pid"], ascending=[True, False, True]).reset_index(drop=True)
+
+def extract_student_at_turn(entries: List[TranscriptEntry], turn: int, teacher: str, student: str) -> str:
+    for e in entries:
+        if e.get("turn") == turn:
+            who, _, _ = model_role_for_chat(e.get("role",""), turn, teacher, student)
+            if who == "student":
+                return e.get("content","") or ""
+    return ""
+
 # =========================
 # Data root helpers (for showing the question in Transcripts)
 # =========================
@@ -214,7 +332,7 @@ def load_problem_index(data_file: str, sig: FileSig) -> Dict[int, str]:
         mapping: Dict[int, str] = {}
         for it in items:
             try:
-                mapping[int(it["id"])] = str(it["prompt"])
+                mapping[int(it["problem"]["id"])] = str(it["problem"]["prompt"])
             except Exception:
                 continue
         return mapping
@@ -448,14 +566,39 @@ if not selected_experiments:
 # Build the combined results across selected experiments
 df_all = build_results_df_across_experiments(exp_root, selected_experiments, teacher, dataset)
 
-# Which students appear (for this teacher/dataset) in ANY selected experiment?
-students_union = sorted(df_all["student"].unique().tolist()) if not df_all.empty else []
+# Build the combined results across selected experiments
+df_all = build_results_df_across_experiments(exp_root, selected_experiments, teacher, dataset)
+
+# Prefer students from df_all when present; otherwise fall back to filesystem discovery
+if not df_all.empty:
+    students_union = sorted(df_all["student"].unique().tolist())
+else:
+    # Union across selected experiments via discover_layout (doesn't require aggregate_results.json)
+    students_set = set()
+    for exp in selected_experiments:
+        exp_dir = str(Path(exp_root) / exp)
+        lay = discover_layout(exp_dir, layout_signature(Path(exp_dir)))
+        if teacher in lay:
+            for s, ds in lay[teacher].items():
+                if dataset in ds:
+                    students_set.add(s)
+    students_union = sorted(students_set)
+
+k_options = sorted(df_all["k"].unique().tolist()) if not df_all.empty else [1, 5, 10]
+default_k = 5 if 5 in k_options else (k_options[0] if k_options else 1)
+selected_k = st.radio(
+    "Pass@k metric",
+    options=k_options,
+    index=k_options.index(default_k) if k_options else 0,
+    horizontal=True,
+    key="results_k_radio",
+)
 
 # =========================
 # Main Tabs
 # =========================
 
-tab_results, tab_transcripts = st.tabs(["📈 Results (Per Model)", "💬 Transcripts"])
+tab_results, tab_transcripts, tab_analysis = st.tabs(["📈 Results (Per Model)", "💬 Transcripts", "🧪 Analysis"])
 
 # =========================
 # Results Tab — PER MODEL rows, each showing all experiments
@@ -480,26 +623,15 @@ with tab_results:
             st.markdown(f"### `{stu}`")
             with st.expander("Show data table", expanded=False):
                 st.dataframe(
-                    df_all[df_all["student"] == stu].sort_values(["k", "turn", "experiment"]),
-                    use_container_width=True
+                    df_all[(df_all["student"] == stu) & (df_all["k"] == int(selected_k))].sort_values(["turn", "experiment"]),
+                    width='stretch'
                 )
 
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.altair_chart(
-                    plot_passk_per_model(df_all, stu, 1, exp_colors, exp_shapes, title_suffix),
-                    use_container_width=True
-                )
-            with col2:
-                st.altair_chart(
-                    plot_passk_per_model(df_all, stu, 5, exp_colors, exp_shapes, title_suffix),
-                    use_container_width=True
-                )
-            with col3:
-                st.altair_chart(
-                    plot_passk_per_model(df_all, stu, 10, exp_colors, exp_shapes, title_suffix),
-                    use_container_width=True
-                )
+            # Show only the chosen Pass@k
+            st.altair_chart(
+                plot_passk_per_model(df_all, stu, int(selected_k), exp_colors, exp_shapes, title_suffix),
+                use_container_width=True
+            )
             st.markdown("---")
 
 # =========================
@@ -540,7 +672,7 @@ with tab_transcripts:
                     if looks_like_python_snippet(question):
                         st.code(question.strip(), language="python")
                     else:
-                        st.markdown(f"> {question}")
+                        st.markdown(f"> {question.strip('#').replace("$", "\\$")}")
                 else:
                     st.markdown("> _Not found in data index._")
 
@@ -607,3 +739,235 @@ with tab_transcripts:
                             """,
                             unsafe_allow_html=True
                         )
+
+# =========================
+# Analysis Tab — unchanged (experiment select inside tab)
+# =========================
+
+with tab_analysis:
+    st.subheader("Qualitative Analysis")
+    st.caption("Pick a Baseline experiment and a Compare experiment. We compute Δ = compare − baseline.")
+
+    if not students_union:
+        st.info("No students found for the current selection (teacher/dataset) across the chosen experiments.")
+        st.stop()
+
+    # --- Who/what ---
+    top_cols = st.columns(2)
+    with top_cols[0]:
+        a_student = st.selectbox("Student", students_union, key="analysis_student")
+    with top_cols[1]:
+        k_opts = sorted(df_all[df_all["student"] == a_student]["k"].unique().tolist()) if not df_all.empty else [1,5,10]
+        a_k = st.selectbox("Pass@k", k_opts, index=0, key="analysis_k")
+
+    mid_cols = st.columns(3)
+    with mid_cols[0]:
+        t_opts = sorted(df_all[df_all["student"] == a_student]["turn"].unique().tolist()) if not df_all.empty else [2,3,4,5,6,7,8,9,10,11]
+        a_turn = st.selectbox("Turn", t_opts, index=max(0, len(t_opts)-1), key="analysis_turn")
+
+    # --- Threshold: slider + plain text box (no +/-), synced ---
+    if "analysis_thr_slider" not in st.session_state:
+        st.session_state.analysis_thr_slider = 1.0
+    if "analysis_thr_box_str" not in st.session_state:
+        st.session_state.analysis_thr_box_str = f"{st.session_state.analysis_thr_slider:.2f}"
+
+    def _sync_from_slider():
+        st.session_state.analysis_thr_box_str = f"{st.session_state.analysis_thr_slider:.2f}"
+
+    def _sync_from_box():
+        s = (st.session_state.analysis_thr_box_str or "").strip()
+        try:
+            v = float(s)
+        except Exception:
+            return
+        v = max(0.0, min(1.0, v))
+        st.session_state.analysis_thr_slider = v
+        st.session_state.analysis_thr_box_str = f"{v:.2f}"
+
+    with mid_cols[1]:
+        st.slider(
+            "Δ threshold",
+            min_value=0.0, max_value=1.0, step=0.05,
+            value=st.session_state.analysis_thr_slider,
+            key="analysis_thr_slider",
+            on_change=_sync_from_slider,
+            help="Minimum Δ = (compare − baseline) to mark as Improved (≤ −Δ as Regressed)."
+        )
+    with mid_cols[2]:
+        st.text_input(
+            label="",
+            value=st.session_state.analysis_thr_box_str,
+            key="analysis_thr_box_str",
+            on_change=_sync_from_box,
+            placeholder="e.g., 0.50",
+            label_visibility="collapsed",
+        )
+    a_thr = float(st.session_state.analysis_thr_slider)
+
+    # --- Baseline & Compare (EXPERIMENT == METHOD) ---
+    st.markdown("#### Baseline & Compare (experiments)")
+
+    if not selected_experiments:
+        st.info("Select at least one experiment in the sidebar.")
+        st.stop()
+
+    # Pick two experiments from the sidebar selection
+    bc_cols = st.columns(2)
+    with bc_cols[0]:
+        baseline_exp = st.selectbox("Baseline", selected_experiments, index=0, key="analysis_baseline_exp")
+    with bc_cols[1]:
+        cmp_default_idx = 1 if len(selected_experiments) > 1 else 0
+        compare_exp = st.selectbox("Compare", selected_experiments, index=cmp_default_idx, key="analysis_compare_exp")
+
+    # Compute Δ across the two experiments
+    exp_dir_base = str(Path(exp_root) / baseline_exp)
+    exp_dir_cmp  = str(Path(exp_root) / compare_exp)
+
+    adf = build_delta_table(
+        exp_dir_base, exp_dir_cmp, teacher, a_student, dataset,
+        int(a_k), int(a_turn), float(a_thr)
+    )
+
+    if adf.empty:
+        st.info("No overlapping examples between the two experiments (or missing itemized files).")
+        st.stop()
+
+    total = len(adf)
+    n_imp = int((adf["bucket"]=="Improved").sum())
+    n_reg = int((adf["bucket"]=="Regressed").sum())
+    n_unch = total - n_imp - n_reg
+
+    st.caption(f"Baseline uses `{baseline_exp}`  |  Compare uses `{compare_exp}`")
+    st.markdown(
+        f"**Total:** {total} · **Improved:** {n_imp} ({(100*n_imp/total):.1f}%) · "
+        f"**Regressed:** {n_reg} ({(100*n_reg/total):.1f}%) · **Unchanged:** {n_unch} ({(100*n_unch/total):.1f}%)"
+    )
+
+    # Bucket filter + preview text
+    bucket_pick = st.radio("Bucket", ["Improved","Regressed","Unchanged","All"], horizontal=True, key="analysis_bucket")
+    show_df = adf if bucket_pick == "All" else adf[adf["bucket"]==bucket_pick].copy()
+
+    def _preview_question(pid: str) -> str:
+        q = lookup_question(DEFAULT_DATA_ROOT, teacher, dataset, a_student, pid)
+        if not q:
+            return ""
+        q = q.strip()
+        return (q[:140] + "…") if len(q) > 160 else q
+
+    show_df = show_df.copy()
+    show_df["question_preview"] = show_df["pid"].apply(_preview_question)
+    show_df = show_df[["pid","bucket","delta","baseline_pass","method_pass","question_preview"]]
+    st.dataframe(show_df, use_container_width=True)
+
+    st.divider()
+    st.markdown("### Inspect example")
+
+    pid_choices = show_df["pid"].tolist()
+    a_pid = st.selectbox("Problem ID", pid_choices, index=0, key="analysis_pid")
+
+    # --- Question ---
+    st.markdown("#### Question")
+    qtext = lookup_question(DEFAULT_DATA_ROOT, teacher, dataset, a_student, a_pid)
+    if qtext:
+        if looks_like_python_snippet(qtext):
+            st.code(qtext.strip(), language="python")
+        else:
+            st.markdown(f"> {qtext.strip('#').replace('$', '\\$')}")
+    else:
+        st.markdown("> _Not found in data index._")
+
+    # --- Full transcripts from BOTH experiments ---
+    base_tdir = transcripts_dir(exp_dir_base, teacher, a_student, dataset)
+    cmp_tdir  = transcripts_dir(exp_dir_cmp,  teacher, a_student, dataset)
+
+    base_fp = base_tdir / f"{a_pid}.json"
+    cmp_fp  = cmp_tdir  / f"{a_pid}.json"
+
+    base_tdata = load_transcript(exp_dir_base, teacher, a_student, dataset, a_pid, file_signature(base_fp))
+    cmp_tdata  = load_transcript(exp_dir_cmp,  teacher, a_student, dataset, a_pid, file_signature(cmp_fp))
+
+    base_pass = float(adf.loc[adf["pid"]==a_pid, "baseline_pass"].iloc[0])
+    meth_pass = float(adf.loc[adf["pid"]==a_pid, "method_pass"].iloc[0])
+    delta_val = float(adf.loc[adf["pid"]==a_pid, "delta"].iloc[0])
+    st.markdown(
+        f"**Baseline pass@{int(a_k)}:** {base_pass:.0f} &nbsp;&nbsp; "
+        f"**Compare pass@{int(a_k)}:** {meth_pass:.0f} &nbsp;&nbsp; "
+        f"**Δ (compare − baseline):** {delta_val:+.0f} &nbsp;&nbsp; "
+        f"**Turn:** {int(a_turn)}"
+    )
+
+    # Bubble CSS (reuse)
+    st.markdown(
+        """
+        <style>
+        .chat-row { display: flex; width: 100%; margin: 0.10rem 0; }
+        .chat-left  { justify-content: flex-start; }
+        .chat-right { justify-content: flex-end;   }
+        .bubble-wrap { display: flex; align-items: flex-start; gap: 0.4rem; max-width: 70%; }
+        .wrap-left  { flex-direction: row; }
+        .wrap-right { flex-direction: row-reverse; }
+        .avatar-emoji { font-size: 3.6rem; line-height: 1; margin-top: 2px; }
+        .bubble { padding: 0.4rem 0.7rem; border-radius: 12px; line-height: 1.35;
+                  border: 1px solid rgba(0,0,0,0.06); box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+                  word-wrap: break-word; white-space: pre-wrap; font-size: 1rem; }
+        .bubble-teacher { background: #f1f5ff; }
+        .bubble-student { background: #f7f7f7; }
+        .meta { font-size: 0.95rem; font-weight: 600; margin-bottom: 0.15rem; }
+        .name { font-weight: 700; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("#### Full Transcripts")
+    with st.expander(f"Baseline transcript — {baseline_exp}", expanded=False):
+        if not isinstance(base_tdata, list):
+            st.warning("Baseline transcript not found or invalid format.")
+        else:
+            for entry in base_tdata:
+                who, display_name, avatar = model_role_for_chat(entry.get("role",""), entry.get("turn", None), teacher, a_student)
+                content = entry.get("content","") or ""
+                is_teacher = (who == "teacher")
+                row_class  = "chat-left" if is_teacher else "chat-right"
+                wrap_class = "wrap-left" if is_teacher else "wrap-right"
+                bubble_cls = "bubble-teacher" if is_teacher else "bubble-student"
+                st.markdown(
+                    f"""
+                    <div class="chat-row {row_class}">
+                      <div class="bubble-wrap {wrap_class}">
+                        <div class="avatar"><span class="avatar-emoji">{avatar}</span></div>
+                        <div class="bubble {bubble_cls}">
+                          <div class="meta"><span class="name">{display_name}</span></div>
+                          <div>{content}</div>
+                        </div>
+                      </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+
+    with st.expander(f"Compare transcript — {compare_exp}", expanded=False):
+        if not isinstance(cmp_tdata, list):
+            st.warning("Compare transcript not found or invalid format.")
+        else:
+            for entry in cmp_tdata:
+                who, display_name, avatar = model_role_for_chat(entry.get("role",""), entry.get("turn", None), teacher, a_student)
+                content = entry.get("content","") or ""
+                is_teacher = (who == "teacher")
+                row_class  = "chat-left" if is_teacher else "chat-right"
+                wrap_class = "wrap-left" if is_teacher else "wrap-right"
+                bubble_cls = "bubble-teacher" if is_teacher else "bubble-student"
+                st.markdown(
+                    f"""
+                    <div class="chat-row {row_class}">
+                      <div class="bubble-wrap {wrap_class}">
+                        <div class="avatar"><span class="avatar-emoji">{avatar}</span></div>
+                        <div class="bubble {bubble_cls}">
+                          <div class="meta"><span class="name">{display_name}</span></div>
+                          <div>{content}</div>
+                        </div>
+                      </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
