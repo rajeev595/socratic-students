@@ -9,7 +9,6 @@ from datetime import timedelta
 from typing import Dict, Any, List, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-import json
 from tqdm import tqdm
 import hydra
 from omegaconf import DictConfig
