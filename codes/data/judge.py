@@ -300,11 +300,10 @@ def main(cfg: DictConfig) -> None:
     # Output files (SFT, DPO) — no GRPO here
     base_dir = os.path.join(
         str(cfg.paths.data),
-        "judge",
         str(cfg.teacher.model),
         str(cfg.experiment.dataset)
     )
-    name = f"rlhf_{cfg.experiment.name}"
+    name = f"judge_{cfg.experiment.name}"
     os.makedirs(os.path.join(base_dir, name), exist_ok=True)
 
     fpath_sft = os.path.join(
