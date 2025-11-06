@@ -18,6 +18,7 @@ from codes.data.utils import format_messages, msgs_to_string
 from codes.prompts.utils import _select_sys_prompt, _problem_greeting
 from codes.run_interact import interact  # reusing your interact()
 from codes.utils.llm.server import build_client
+from codes.utils.llm.chat import chat_complete
 from codes.utils.vars import set_envs
 from codes.utils.file_ops import load_json_resilient
 
@@ -90,8 +91,8 @@ def _build_judge_prompt(
 
 
 def judge_select_best_index(
-    judge_client: OpenAI,
-    judge_model_name: str,
+    client: OpenAI,
+    model_name: str,
     data_type: str,
     problem: Dict[str, Any],
     history_texts: List[Any],
@@ -111,13 +112,16 @@ def judge_select_best_index(
         extra_instructions=extra_instructions,
     )
     try:
-        resp = judge_client.chat.completions.create(
-            model=judge_model_name,
+        resp, p_tks, c_tks = chat_complete(
+            client=client,
+            model_name=model_name,
             messages=messages,
+            n=1,
             temperature=temperature,
-            max_tokens=4,
+            max_tokens=4
         )
-        raw = resp.choices[0].message.content.strip()
+
+        raw = resp[0]
         digits = "".join(ch for ch in raw if ch.isdigit())
         idx1 = int(digits) if digits else 1
         idx0 = max(0, min(len(candidates) - 1, idx1 - 1))
@@ -198,8 +202,8 @@ def run_problem_judge(
 
         # ---- Judge picks best candidate (index)
         best_idx = judge_select_best_index(
-            judge_client=teacher_client,
-            judge_model_name=teacher_name,
+            client=teacher_client,
+            model_name=teacher_name,
             data_type=data_type,
             problem=evaluation_problem,
             history_texts=texts,
