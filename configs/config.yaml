@@ -18,19 +18,20 @@ student:
     path:
   temperature: 0.8
   server: "vllm"    # sglang/vllm/hf
-  gpus: [4,5,6,7]
+  gpus: [4,5]
 
 guide:
   model: qwen30
   temperature: 0.8
   server: "vllm"    # sglang/vllm/hf
-  gpus: [0, 1]
+  gpus: [6,7]
 
 # Data & paths
 data:
   type: math        # code or math
   data_amount: 1000
   split: test
+  name: "hard"      # hard / rlhf / judge
 
 # Generation / evaluation
 gen:
@@ -68,7 +69,7 @@ train:
   grpo_lr: 5e-6  
   beta: 0.2
   sft_epochs: 0
-  dpo_epochs: 0
+  dpo_epochs: 5
   grpo_epochs: 5
   grpo_tau: 0.7
   grpo_reward_norm: "zscore"

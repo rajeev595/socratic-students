@@ -307,7 +307,7 @@ def main(cfg: DictConfig) -> None:
         str(cfg.teacher.model),
         str(cfg.experiment.dataset)
     )
-    name = f"judge_{cfg.experiment.name}"
+    name = cfg.data.name
     os.makedirs(os.path.join(base_dir, name), exist_ok=True)
 
     fpath_sft = os.path.join(

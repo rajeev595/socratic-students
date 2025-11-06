@@ -407,7 +407,7 @@ def main(cfg: DictConfig) -> None:
     # Output files (include guide in filename to avoid collisions)
     base_dir = os.path.join(str(cfg.paths.data), str(cfg.teacher.model), str(cfg.experiment.dataset))
     split_dir = os.path.join(base_dir, f"splits_{cfg.gen.pass_at_k_threshold}")
-    name = f"rlhf_{cfg.experiment.name}"
+    name = cfg.data.name
 
     # Prefer same naming convention as your rlhf_guide (student_guide_*)
     def _fname(stem: str, ext: str) -> str:
