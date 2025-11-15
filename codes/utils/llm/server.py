@@ -349,7 +349,7 @@ def build_client(
     served_model_name: Optional[str] = None,
     extra_server_args: Optional[List[str]] = None,
     env_overrides: Optional[Dict[str, str]] = None,
-    ready_timeout: float = 600.0,
+    ready_timeout: float = 1800.0,
     exe: Optional[str] = None,
     verbose: bool = True,
 ):
@@ -401,7 +401,22 @@ def build_client(
     else:
         raise ValueError(f"Unknown server type: {server!r}. Use 'sglang' or 'vllm'.")
 
-    # Enter the context immediately and register cleanup
     client = cm.__enter__()
-    atexit.register(lambda: cm.__exit__(None, None, None))
+
+    def _close():
+        try:
+            cm.__exit__(None, None, None)   # triggers _shutdown(proc)
+        except Exception:
+            pass
+
+    # give yourself a one-liner switch
+    client.close = _close
+    client.shutdown = _close
+    try:
+        # best-effort, still kill at interpreter exit
+        import atexit
+        atexit.register(_close)
+    except Exception:
+        pass
+
     return client
