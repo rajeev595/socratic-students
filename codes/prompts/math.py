@@ -40,3 +40,154 @@ Example:
 Question: What is 3 + 3?
 Answer: 6
 """
+
+
+# -------------------- Judge Progress Prompts --------------------
+
+judge_progress_system_prompt = """\
+You are a strict and consistent math grader.
+Your task is to evaluate how much progress a student's reasoning shows toward solving a math problem.
+
+You must estimate a single real-valued score between 0 and 1:
+- 0.0 → completely wrong or irrelevant reasoning.
+- 0.25 → only the setup or an initial idea is correct.
+- 0.50 → roughly halfway; some correct derivations but key steps missing or incorrect.
+- 0.75 → nearly correct; only small arithmetic or algebraic mistakes.
+- 1.0 → fully correct and complete solution.
+
+Guidelines:
+- Use intermediate values (e.g., 0.62) if progress lies between anchor points.
+- Be strict but fair: reward correct logical steps that meaningfully advance toward the right answer.
+- Ignore minor stylistic differences (notation, units, variable names) if mathematically equivalent.
+- Do not reward irrelevant or circular reasoning.
+- If the final answer matches the gold answer but reasoning is absent or wrong, do NOT give 1.0; cap the score to reflect weak progress.
+- The gold answer is provided only as a reference for what constitutes a correct solution; do NOT copy it or include it in your output.
+- Ensure "progress" is a numeric value (not a string) in [0, 1].
+- Return only valid JSON—nothing else—and include a short justification (≤30 words).
+- Do not repeat the problem text or add extra commentary.
+"""
+
+
+def get_judge_progress_user_prompt(problem, student_answer):
+    return f"""\
+Problem:
+{problem["prompt"]}
+
+Gold final answer (for reference only; do not reveal in output):
+{problem["solution"]}
+
+Student's reasoning so far:
+{student_answer}
+
+Please output JSON only in the following format:
+{{
+  "progress": float between 0 and 1,
+  "confidence": "low" | "medium" | "high",
+  "justification": "one short sentence (≤30 words)"
+}}
+"""
+
+
+# -------------------- Judge Similarity Prompts --------------------
+
+judge_similarity_system_prompt = """\
+You are a careful and consistent evaluator.
+Given a math problem and two student responses (each may include reasoning plus a question),
+your task is to identify the core mathematical question being asked in each response and rate
+how similar those questions are.
+
+Score ONLY by the intent of the question/sub-goal (not wording or style):
+- What quantity or relation is sought?
+- Which sub-step of the solution is being advanced?
+- What information is requested to proceed?
+
+Use ONE of these allowed similarity scores with the exact meaning:
+- 0.00  → Unrelated or incompatible question intents.
+- 0.25  → Only loosely related (both about the problem but target different aspects).
+- 0.50  → Related but not the same (same high-level topic, different sub-step or target).
+- 0.75  → Nearly the same intent (minor scope or variable differences; answer path is the same).
+- 1.00  → Same question intent (mathematically equivalent; differ only in phrasing/notation).
+
+Rules:
+- Focus on mathematical intent, not surface form.
+- If torn between two anchors, choose the LOWER one (be conservative).
+- Return strict JSON only.
+
+Output schema:
+{
+  "similarity": 0.0 | 0.25 | 0.5 | 0.75 | 1.0,
+  "justification": "≤20 words explaining the anchor choice"
+}
+"""
+
+
+def get_judge_similarity_user_prompt(problem, response_a, response_b):
+    return f"""\
+Math Problem:
+{problem}
+
+Response A:
+{response_a}
+
+Response B:
+{response_b}
+
+Output JSON ONLY in this format:
+{{
+"similarity": 0.0 | 0.25 | 0.5 | 0.75 | 1.0,
+"justification": "≤20 words explaining the anchor choice"
+}}
+"""
+
+
+judge_rank_system_prompt_math = """\
+You are a strict and consistent evaluator of QUESTION INTENT in math problem solving.
+Given ONE target student question and a LIST of candidate student questions (from another method),
+rank the candidates from MOST similar intent to LEAST similar.
+
+Similarity is about the mathematical intent of the question:
+- what subgoal is being asked
+- what quantity/relationship they seek
+- what information is needed to proceed
+Ignore phrasing and tone if the intent is the same.
+
+Rules:
+- Break ties: if two candidates are equally similar, prefer the one that appears earlier in the dialog (smaller turn index).
+- Do NOT reward generic filler like “any hint?” unless it matches target intent.
+- Return only strict JSON.
+"""
+
+
+def get_rank_user_prompt_math(
+    problem_prompt: str,
+    target_text: str,
+    candidates: list[tuple[int, str]]
+) -> str:
+    # candidates = [(j_idx, text), ...] where j_idx are odd-turn numbers like 1,3,5,...
+    ids, lines = [], []
+    for idx, txt in candidates:
+        lines.append(f"- id={idx}: {txt}")
+        ids.append(str(idx))
+    candidates_block = "\n".join(lines)
+    ids = ", ".join(ids)
+    return f"""\
+Problem:
+{problem_prompt}
+
+Target (from compare method):
+{target_text}
+
+Candidates (from baseline/unguided):
+{candidates_block}
+
+Your task:
+Rank **all** candidates ({ids}) (not just some) from most to least similar to the target.
+Every candidate id must appear exactly once in the "ranking" list.
+If two are equally similar, break ties by whichever occurs earlier.
+
+Output strict JSON only:
+{{
+  "ranking": [list of candidate ids in descending similarity, e.g., [5,3,1]],
+  "justification": "≤200 words explaining your ranking"
+}}
+"""
