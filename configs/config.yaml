@@ -49,6 +49,10 @@ gen:
   dpo_margin_max: 0.50          # cap too-easy negatives (<= 0.50)
   dpo_max_pairs_per_turn:       # optional per-turn cap; remove or set null to disable
 
+  rollout_horizon: 3            # or 2/3 etc.
+  rollout_gamma: 0.9            # < 1.0 to prefer earlier success
+  sft_gate_min: 0.85
+
 
 # Direct Preference Optimization (DPO) settings
 train:
@@ -71,6 +75,8 @@ train:
   sft_epochs: 0
   dpo_epochs: 5
   grpo_epochs: 5
+  dpo_eval_steps: 25
+  sft_eval_steps: 25
   grpo_tau: 0.7
   grpo_reward_norm: "zscore"
   grpo_kl_coeff: 0.0
@@ -86,9 +92,15 @@ experiment:
   start_from_turn: 1    # 1 (new), odd (student), even (teacher)
   total_turns: 11
   num_workers: 64
-  chunk_size: 100
+  chunk_size: 128
 
 plot:
+
+analysis:
+  baseline: unguided                          # experiment name for CoT
+  compare: cot                                # experiment name for Unguided
+  model: Qwen/Qwen3-Embedding-0.6B            # Model to use for computing sentence embeddings
+  batch_size: 16
 
 hydra:
   run:
