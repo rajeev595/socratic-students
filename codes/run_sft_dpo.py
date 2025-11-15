@@ -182,6 +182,7 @@ def train_sft(
     grad_accum: int,
     lr: float,
     epochs: int,
+    eval_steps: int
 ):
     # Enable GC for SFT (usually stable and saves memory)
     model, tokenizer, peft_cfg = setup_for_training(
@@ -211,9 +212,9 @@ def train_sft(
         ddp_find_unused_parameters=False,   # safer with adapters
         # eval + save cadence
         eval_strategy="steps",
-        eval_steps=5,
+        eval_steps=eval_steps,
         save_strategy="steps",
-        save_steps=5,
+        save_steps=eval_steps,
         save_total_limit=1,
         # load_best_model_at_end=True,      # Causes OOM, turn it OFF
         metric_for_best_model="eval_loss",
@@ -264,7 +265,8 @@ def train_dpo(
     grad_accum: int,
     lr: float,
     beta: float,
-    epochs: int
+    epochs: int,
+    eval_steps: int
 ):
     model, tokenizer, peft_cfg = setup_for_training(
         tokenizer,
@@ -311,9 +313,9 @@ def train_dpo(
         ddp_find_unused_parameters=False,
         # eval + save cadence
         eval_strategy="steps",
-        eval_steps=5,
+        eval_steps=eval_steps,
         save_strategy="steps",
-        save_steps=5,
+        save_steps=eval_steps,
         save_total_limit=1,
         # load_best_model_at_end=True,
         metric_for_best_model="eval_rewards/accuracies",
@@ -402,7 +404,7 @@ def main(cfg: DictConfig) -> None:
     if cfg.train.sft_epochs > 0:
         train_fpath_sft, val_fpath_sft = [], []
         for i in range(cfg.gen.dagger_iter + 1):
-            if "self" in cfg.experiment.name:
+            if "self" in cfg.experiment.name or "judge" in cfg.experiment.name:
                 train_fpath = os.path.join(root, f"{cfg.student.model}_sft_iter{i}_train.jsonl")
                 val_fpath = os.path.join(root, f"{cfg.student.model}_sft_iter{i}_val.jsonl")
 
@@ -431,14 +433,15 @@ def main(cfg: DictConfig) -> None:
             batch_size=cfg.train.sft_batch_size,
             grad_accum=cfg.train.grad_accum,
             lr=cfg.train.sft_lr,
-            epochs=cfg.train.sft_epochs
+            epochs=cfg.train.sft_epochs,
+            eval_steps=cfg.train.sft_eval_steps
         )
 
     # DPO
     if cfg.train.dpo_epochs > 0:
         train_fpath_dpo, val_fpath_dpo = [], []
         for i in range(cfg.gen.dagger_iter + 1):
-            if "self" in cfg.experiment.name:
+            if "self" in cfg.experiment.name or "judge" in cfg.experiment.name:
                 train_fpath = os.path.join(root, f"{cfg.student.model}_dpo_iter{i}_train.jsonl")
                 val_fpath = os.path.join(root, f"{cfg.student.model}_dpo_iter{i}_val.jsonl")
 
@@ -471,7 +474,8 @@ def main(cfg: DictConfig) -> None:
             grad_accum=cfg.train.grad_accum,
             lr=cfg.train.dpo_lr,
             beta=cfg.train.beta,
-            epochs=cfg.train.dpo_epochs
+            epochs=cfg.train.dpo_epochs,
+            eval_steps=cfg.train.dpo_eval_steps
         )
 
     elapsed = time.perf_counter() - start_time
