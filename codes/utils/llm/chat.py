@@ -22,6 +22,7 @@ from tenacity import (
     stop_after_attempt,
     wait_random_exponential,
 )
+from tiktoken import encoding_for_model
 
 from codes.utils.llm.server import get_model_name
 
@@ -29,6 +30,14 @@ from codes.utils.llm.server import get_model_name
 # ---------------------------------------------------------------------------
 # Chat completion
 # ---------------------------------------------------------------------------
+
+def count_tokens(model_name: str, messages: List[Dict[str, str]]) -> int:
+    enc = encoding_for_model(model_name)
+    total = 0
+    for m in messages:
+        total += len(enc.encode(m["content"]))
+    return total
+
 
 def chat_complete_local(
     client: OpenAI,
@@ -70,6 +79,14 @@ def chat_complete_local(
         else:
             # No user message to merge into; degrade gracefully by converting system→user.
             use_messages = [{"role": "user", "content": sys_msg}] + use_messages[1:]
+
+    # # Set the max tokens based on the model context length
+    # input_tokens = count_tokens(model_name, use_messages)
+    # ctx = 8192  # or detect from model_name
+
+    # allowed_max = max(1, ctx - input_tokens)
+    # if max_tokens > allowed_max:
+    #     max_tokens = allowed_max
 
     resp = client.chat.completions.create(
         model=get_model_name(model_name),
