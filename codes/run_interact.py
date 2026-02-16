@@ -224,124 +224,128 @@ def run_problem(
       - total_teacher_prompt_tks, total_teacher_completion_tks
       - total_student_prompt_tks, total_student_completion_tks
     """
-    assert interaction_problem["id"] == evaluation_problem["id"], "pid of interaction and evaluation doesn't match!"
+    try:
+        assert interaction_problem["id"] == evaluation_problem["id"], "pid of interaction and evaluation doesn't match!"
 
-    pid = interaction_problem["id"]
-    transcript_fpath = os.path.join(transcripts_dir, f"{pid}.json")
+        pid = interaction_problem["id"]
+        transcript_fpath = os.path.join(transcripts_dir, f"{pid}.json")
 
-    if os.path.exists(transcript_fpath):
-        logger.info(f"loading transcript from {transcript_fpath}")
-        data = load_json_resilient(transcript_fpath)
+        if os.path.exists(transcript_fpath):
+            logger.info(f"loading transcript from {transcript_fpath}")
+            data = load_json_resilient(transcript_fpath)
 
-        if len(data) == total_turns:
-            texts = [ex["content"] for ex in data]
-            return texts, {}, 0, 0, 0, 0
+            if len(data) == total_turns:
+                texts = [ex["content"] for ex in data]
+                return texts, {}, 0, 0, 0, 0
 
-    pass_at_k_scores = {}
-    generations = {}
-    total_teacher_prompt_tks = total_teacher_completion_tks = 0
-    total_student_prompt_tks = total_student_completion_tks = 0
+        pass_at_k_scores = {}
+        generations = {}
+        total_teacher_prompt_tks = total_teacher_completion_tks = 0
+        total_student_prompt_tks = total_student_completion_tks = 0
 
-    # Initialize / resume conversation
-    if start_from_turn <= 1:
-        texts: List[str] = [_problem_greeting(data_type)]
-        cur_start = 1
-        logger.debug(f"[{pid}] starting fresh")
-    else:
-        tpath = os.path.join(transcripts_dir, f"{pid}.json")
-        if os.path.exists(tpath):
-            prev = load_json_resilient(tpath)
-            texts = [m["content"] for m in prev][:start_from_turn]
-            cur_start = start_from_turn
-            logger.info(f"[{pid}] resumed at turn {cur_start} from {tpath}")
-        else:
-            texts = ["Hi there! Let's pick up the conversation."]
+        # Initialize / resume conversation
+        if start_from_turn <= 1:
+            texts: List[str] = [_problem_greeting(data_type)]
             cur_start = 1
-            logger.warning(f"[{pid}] resume requested but no transcript found; starting fresh")
-
-    for turn in range(cur_start, total_turns + 1, 1):
-        is_student = (turn % 2 == 1)
-
-        # Optional assessment injected into previous text
-        if assessment_turn > 0 and turn == assessment_turn and len(texts) > 0:
-            texts[-1] += get_assessment(
-                data_type=data_type,
-                student_client=student_client,
-                student_name=student_name,
-                student_temperature=student_temperature,
-                teacher_client=teacher_client,
-                teacher_name=teacher_name,
-                teacher_temperature=teacher_temperature,
-                problem_dict=interaction_problem,
-                texts=texts,
-            )
-            logger.debug(f"[{pid}] assessment injected at turn {turn}")
-
-        # Evaluation on student turns
-        if is_student:
-            prev_convo = msgs_to_string(texts[: turn])
-
-            pass_at_k_scores_turn, generations_turn, p_tks, c_tks = evaluate(
-                prev_convo=prev_convo,
-                data_type=data_type,
-                student_client=student_client,
-                student_name=student_name,
-                student_temperature=0.3,
-                teacher_client=teacher_client,
-                teacher_name=teacher_name,
-                teacher_temperature=teacher_temperature,
-                problem=evaluation_problem,
-                k_values=k_values,
-                num_samples=num_samples,
-                is_ood=is_ood,
-            )
-
-            pass_at_k_scores[turn] = pass_at_k_scores_turn
-            total_student_prompt_tks += p_tks
-            total_student_completion_tks += c_tks
-            generations[turn] = generations_turn
-
-            logger.debug(f"[{evaluation_problem['id']}] turn {turn} pass@k={pass_at_k_scores[turn]}")
-
-        # Run interaction step
-        replies, p_tks, c_tks = interact(
-            is_student,
-            texts,
-            interaction_problem,
-            1,
-            data_type,
-            student_client if is_student else teacher_client,
-            student_name if is_student else teacher_name,
-            student_temperature if is_student else teacher_temperature,
-            use_cot
-        )
-
-        # Update chat transcript and token counts
-        texts.append(replies[0])
-        if is_student:
-            total_student_prompt_tks += p_tks
-            total_student_completion_tks += c_tks
+            logger.debug(f"[{pid}] starting fresh")
         else:
-            total_teacher_prompt_tks += p_tks
-            total_teacher_completion_tks += c_tks
+            tpath = os.path.join(transcripts_dir, f"{pid}.json")
+            if os.path.exists(tpath):
+                prev = load_json_resilient(tpath)
+                texts = [m["content"] for m in prev][:start_from_turn]
+                cur_start = start_from_turn
+                logger.info(f"[{pid}] resumed at turn {cur_start} from {tpath}")
+            else:
+                texts = ["Hi there! Let's pick up the conversation."]
+                cur_start = 1
+                logger.warning(f"[{pid}] resume requested but no transcript found; starting fresh")
 
-    # Save transcript with roles (model names as roles)
-    edited_msgs: List[Dict[str, Any]] = []
-    for idx, text in enumerate(texts):
-        role = student_name if (idx % 2 == 1) else teacher_name
-        edited_msgs.append({"role": role, "turn": idx, "content": text})
+        for turn in range(cur_start, total_turns + 1, 1):
+            is_student = (turn % 2 == 1)
 
-    # Save transcript
-    save_json_atomic(os.path.join(transcripts_dir, f"{pid}.json"), edited_msgs)
+            # Optional assessment injected into previous text
+            if assessment_turn > 0 and turn == assessment_turn and len(texts) > 0:
+                texts[-1] += get_assessment(
+                    data_type=data_type,
+                    student_client=student_client,
+                    student_name=student_name,
+                    student_temperature=student_temperature,
+                    teacher_client=teacher_client,
+                    teacher_name=teacher_name,
+                    teacher_temperature=teacher_temperature,
+                    problem_dict=interaction_problem,
+                    texts=texts,
+                )
+                logger.debug(f"[{pid}] assessment injected at turn {turn}")
 
-    return (
-        generations,
-        pass_at_k_scores,
-        total_teacher_prompt_tks,
-        total_teacher_completion_tks,
-        total_student_prompt_tks,
-        total_student_completion_tks
-    )
+            # Evaluation on student turns
+            if is_student:
+                prev_convo = msgs_to_string(texts[: turn])
+
+                pass_at_k_scores_turn, generations_turn, p_tks, c_tks = evaluate(
+                    prev_convo=prev_convo,
+                    data_type=data_type,
+                    student_client=student_client,
+                    student_name=student_name,
+                    student_temperature=0.3,
+                    teacher_client=teacher_client,
+                    teacher_name=teacher_name,
+                    teacher_temperature=teacher_temperature,
+                    problem=evaluation_problem,
+                    k_values=k_values,
+                    num_samples=num_samples,
+                    is_ood=is_ood,
+                )
+
+                pass_at_k_scores[turn] = pass_at_k_scores_turn
+                total_student_prompt_tks += p_tks
+                total_student_completion_tks += c_tks
+                generations[turn] = generations_turn
+
+                logger.debug(f"[{evaluation_problem['id']}] turn {turn} pass@k={pass_at_k_scores[turn]}")
+
+            # Run interaction step
+            replies, p_tks, c_tks = interact(
+                is_student,
+                texts,
+                interaction_problem,
+                1,
+                data_type,
+                student_client if is_student else teacher_client,
+                student_name if is_student else teacher_name,
+                student_temperature if is_student else teacher_temperature,
+                use_cot
+            )
+
+            # Update chat transcript and token counts
+            texts.append(replies[0])
+            if is_student:
+                total_student_prompt_tks += p_tks
+                total_student_completion_tks += c_tks
+            else:
+                total_teacher_prompt_tks += p_tks
+                total_teacher_completion_tks += c_tks
+
+        # Save transcript with roles (model names as roles)
+        edited_msgs: List[Dict[str, Any]] = []
+        for idx, text in enumerate(texts):
+            role = student_name if (idx % 2 == 1) else teacher_name
+            edited_msgs.append({"role": role, "turn": idx, "content": text})
+
+        # Save transcript
+        save_json_atomic(os.path.join(transcripts_dir, f"{pid}.json"), edited_msgs)
+
+        return (
+            generations,
+            pass_at_k_scores,
+            total_teacher_prompt_tks,
+            total_teacher_completion_tks,
+            total_student_prompt_tks,
+            total_student_completion_tks
+        )
+    except Exception as e:
+        logger.info(f"Problem {interaction_problem['id']} encountered error: {e}")
+        return None
 
 
 # ---------- main combined loop ----------
@@ -488,6 +492,10 @@ def main(cfg: DictConfig) -> None:
             ): ip["id"] for (ip, ep) in zip(interaction_problems_chunk, evaluation_problems_chunk)}
 
             for future in as_completed(future_to_pid):
+                result = future.result()
+                if not result:
+                    continue
+
                 (
                     generations,
                     results,
@@ -495,7 +503,7 @@ def main(cfg: DictConfig) -> None:
                     teacher_completion_tks,
                     student_prompt_tks,
                     student_completion_tks,
-                ) = future.result()
+                ) = result
 
                 # Update aggregates
                 pid = future_to_pid[future]
