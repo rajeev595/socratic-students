@@ -26,6 +26,7 @@ _MODEL_ALIASES: Dict[str, str] = {
     "llama3": "meta-llama/Llama-3.2-3B-Instruct",
     "llama1": "meta-llama/Llama-3.2-1B-Instruct",
 
+    "qwen1_5": "Qwen/Qwen2.5-1.5B-Instruct",
     "qwen3": "Qwen/Qwen2.5-3B-Instruct",
     "qwen7": "Qwen/Qwen2.5-7B-Instruct",
     "qwen14": "Qwen/Qwen2.5-14B-Instruct",
@@ -312,6 +313,9 @@ def launch_vllm_client(
             "--enable-lora", "--lora-modules", f"{lora.name}={lora.path}",
             # "--quantization", "bitsandbytes", "--load-format", "bitsandbytes"
         ]
+
+    if tp == 2:
+        cmd += ["--disable-custom-all-reduce"]
 
     if extra_server_args:
         cmd += list(extra_server_args)
