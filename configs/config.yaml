@@ -1,8 +1,8 @@
 paths:
-  openai_api_key_fpath: /home/ambati/.openai_api_key.zshrc      # path to OpenAI API key
-  data: /playpen-ssd2/ambati/interact_plus/data/                # path to data
-  experiments: /playpen-ssd2/ambati/interact_plus/experiments/  # path to save experiment results
-  hf_home: /playpen-ssd2/pretrained_models/                     # Hugging Face cache dir
+  openai_api_key_fpath: /home/ambati/.openai_api_key.zshrc        # path to OpenAI API key
+  data: /playpen-shared/ambati/interact_plus/data/                # path to data
+  experiments: /playpen-shared/ambati/interact_plus/experiments/  # path to save experiment results
+  hf_home: /playpen-shared/ambati/hf_home/                        # Hugging Face cache dir
 
 # Model
 teacher:
@@ -18,7 +18,7 @@ student:
     path:
   temperature: 0.8
   server: "vllm"    # sglang/vllm/hf
-  gpus: [4,5]
+  gpus: [4,5,6,7]
 
 guide:
   model: qwen30
@@ -26,12 +26,18 @@ guide:
   server: "vllm"    # sglang/vllm/hf
   gpus: [6,7]
 
+judge:
+  model: llama70
+  temperature: 0.8
+  server: "vllm"    # sglang/vllm/hf
+  gpus: [0,1,2,3]
+
 # Data & paths
 data:
   type: math        # code or math
-  data_amount: 1000
+  data_amount: 2000
   split: test
-  name: "hard"      # hard / rlhf / judge
+  name: "rlhf_margin_zero"      # hard / rlhf / judge
 
 # Generation / evaluation
 gen:
@@ -45,8 +51,8 @@ gen:
   take_every: 1                 # only used for math dataset
   dagger_iter: 0                # DAgger iteration
   use_delta_reward: true        # counterfactual reward = current - baseline
-  dpo_margin_min: 0.01          # include near-ties (>= 0.01)
-  dpo_margin_max: 0.50          # cap too-easy negatives (<= 0.50)
+  dpo_margin_min: 0.0005        # include near-ties (>= 0.01)
+  dpo_margin_max: 1.0           # cap too-easy negatives (<= 0.50)
   dpo_max_pairs_per_turn:       # optional per-turn cap; remove or set null to disable
 
   rollout_horizon: 3            # or 2/3 etc.
@@ -84,15 +90,15 @@ train:
 
 # Experiment settings
 experiment:
-  name: selfguided
+  name: data_collection
   cot: False
   ood: False
   dataset: gsm8k        # code - humaneval_opc/mbpp, math - gsm8k
   assessment_turn: -1   # -1 (none), 1 (pre), 5 (mid)
   start_from_turn: 1    # 1 (new), odd (student), even (teacher)
   total_turns: 11
-  num_workers: 64
-  chunk_size: 128
+  num_workers: 128
+  chunk_size: 256
 
 plot:
 

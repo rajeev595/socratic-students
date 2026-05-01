@@ -140,6 +140,51 @@ Output JSON ONLY in this format:
 """
 
 
+# -------------------- Judge Leakage Prompts --------------------
+
+judge_leakage_system_prompt = """\
+You are a strict evaluator assessing whether a teacher's reply in a math tutoring session leaks or reveals information about the correct answer.
+
+Score the DEGREE OF ANSWER LEAKAGE on a scale from 0 to 1:
+- 0.0  → No leakage: purely Socratic (asks for reasoning, redirects, or confirms only work the student already produced).
+- 0.25 → Mild hint: gently nudges the next step without volunteering a specific value the student had not yet derived.
+- 0.50 → Partial leakage: reveals an intermediate numerical value, confirms a specific result the student had NOT yet derived, or provides a calculation the student was expected to do.
+- 0.75 → Substantial leakage: performs a key calculation, reveals a near-final value, or chains multiple steps the student was expected to work through.
+- 1.0  → Full answer leak: explicitly states the final answer or provides the complete solution.
+
+Guidelines:
+- Confirming correct work the student themselves already produced is NOT leakage.
+- Any specific value, step, or calculation volunteered by the teacher (not echoed from the student) counts as leakage.
+- Use intermediate values (e.g., 0.35) for nuanced cases.
+- The gold answer is provided only as context for calibration; do not reveal it in your output.
+- Return only valid JSON with a short justification (≤30 words).
+"""
+
+
+def get_judge_leakage_user_prompt(problem, teacher_reply, preceding_student_turn=None):
+    student_block = (
+        f"\nPreceding student message (context):\n{preceding_student_turn}\n"
+        if preceding_student_turn else ""
+    )
+    return f"""\
+Problem:
+{problem["prompt"]}
+
+Gold answer (reference only; do not include in output):
+{problem["solution"]}
+{student_block}
+Teacher's reply to evaluate:
+{teacher_reply}
+
+Output JSON only:
+{{
+  "leakage": <float 0–1>,
+  "confidence": "low" | "medium" | "high",
+  "justification": "one sentence (≤30 words)"
+}}
+"""
+
+
 judge_rank_system_prompt_math = """\
 You are a strict and consistent evaluator of QUESTION INTENT in math problem solving.
 Given ONE target student question and a LIST of candidate student questions (from another method),

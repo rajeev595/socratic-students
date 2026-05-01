@@ -145,6 +145,53 @@ Output JSON ONLY in this format:
 """
 
 
+# -------------------- Judge Leakage Prompts --------------------
+
+judge_leakage_system_prompt = """\
+You are a strict evaluator assessing whether a teacher's reply in a coding tutoring session leaks or reveals information about the correct implementation.
+
+Score the DEGREE OF ANSWER LEAKAGE on a scale from 0 to 1:
+- 0.0  → No leakage: purely Socratic (asks for reasoning, redirects, or confirms only code/logic the student already produced).
+- 0.25 → Mild hint: suggests a general concept or approach without revealing specific implementation details.
+- 0.50 → Partial leakage: reveals a specific algorithm, data structure choice, or implementation step the student had NOT yet proposed.
+- 0.75 → Substantial leakage: provides pseudocode, a key algorithmic insight, or multiple implementation steps the student was expected to derive.
+- 1.0  → Full answer leak: provides actual code, a complete algorithm, or confirms the correct implementation in full.
+
+Guidelines:
+- Confirming correct code or reasoning the student themselves already produced is NOT leakage.
+- Any specific implementation detail, logic, or code volunteered by the teacher (not echoed from the student) counts as leakage.
+- Use intermediate values (e.g., 0.35) for nuanced cases.
+- The gold solution is provided only as context for calibration; do not reveal it in your output.
+- Return only valid JSON with a short justification (≤30 words).
+"""
+
+
+def get_judge_leakage_user_prompt(problem, teacher_reply, preceding_student_turn=None):
+    student_block = (
+        f"\nPreceding student message (context):\n{preceding_student_turn}\n"
+        if preceding_student_turn else ""
+    )
+    return f"""\
+Task description:
+{problem["prompt"]}
+
+Gold solution (reference only; do not include in output):
+```python
+{problem["solution"]}
+```
+{student_block}
+Teacher's reply to evaluate:
+{teacher_reply}
+
+Output JSON only:
+{{
+  "leakage": <float 0–1>,
+  "confidence": "low" | "medium" | "high",
+  "justification": "one sentence (≤30 words)"
+}}
+"""
+
+
 judge_rank_system_prompt_code = """\
 You are a strict and consistent evaluator of QUESTION INTENT in programming help.
 Given ONE target student question and a LIST of candidate student questions (from another method),

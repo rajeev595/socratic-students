@@ -47,6 +47,11 @@ from codes.prompts.code import get_judge_similarity_user_prompt as get_similarit
 from codes.prompts.math import judge_rank_system_prompt_math, get_rank_user_prompt_math
 from codes.prompts.code import judge_rank_system_prompt_code, get_rank_user_prompt_code
 
+from codes.prompts.math import judge_leakage_system_prompt as leakage_system_prompt_math
+from codes.prompts.math import get_judge_leakage_user_prompt as get_leakage_user_prompt_math
+from codes.prompts.code import judge_leakage_system_prompt as leakage_system_prompt_code
+from codes.prompts.code import get_judge_leakage_user_prompt as get_leakage_user_prompt_code
+
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -85,6 +90,20 @@ def _extract_student_texts(transcript: List[Dict[str, Any]]) -> List[str]:
         acc.append(s.strip())
         cumulative.append("\n\n---\n\n".join(acc))
     return cumulative
+
+def _extract_teacher_texts(transcript: List[Dict[str, Any]]) -> List[tuple]:
+    """
+    Returns a list of (teacher_reply, preceding_student_message) tuples.
+    Teacher instructional turns are at even indices >= 2 (turns 2, 4, 6, ...).
+    The preceding student message is always at index i-1.
+    """
+    result = []
+    for i in range(2, len(transcript), 2):
+        teacher_reply = transcript[i]["content"]
+        preceding_student = transcript[i - 1]["content"] if i >= 1 else None
+        result.append((teacher_reply, preceding_student))
+    return result
+
 
 def _load_turns(transcripts_dir: str, pid: str) -> dict:
     """
@@ -205,8 +224,16 @@ def get_improvement_matrix(
     compare_dir: str,
     k: int = 5
 ) -> np.ndarray:
-    baseline_results = load_json_resilient(os.path.join(baseline_dir, "itemized_results.json"))
-    compare_results  = load_json_resilient(os.path.join(compare_dir,  "itemized_results.json"))
+    baseline_results_fpath = os.path.join(baseline_dir, "itemized_results.json")
+    if not os.path.exists(baseline_results_fpath):
+        baseline_results_fpath = os.path.join(baseline_dir, "itemized_results_0.json")
+
+    compare_results_fpath = os.path.join(compare_dir, "itemized_results.json")
+    if not os.path.exists(compare_results_fpath):
+        compare_results_fpath = os.path.join(compare_dir, "itemized_results_0.json")
+
+    baseline_results = load_json_resilient(baseline_results_fpath)
+    compare_results  = load_json_resilient(compare_results_fpath)
 
     mask = []
     for pid in problems:
@@ -326,8 +353,92 @@ def analyze_problem(
         "token_usage": {"prompt": total_prompt_tokens, "completion": total_completion_tokens},
     }
 
+def analyze_leakage(
+    judge_client,
+    judge_model_name: str,
+    problem: Dict[str, Any],
+    transcripts_dir: str,
+    system_prompt: str,
+    get_user_prompt: Callable,
+) -> Dict[str, Any]:
+    """
+    For one problem:
+      - Load transcript
+      - Extract teacher instructional turns (even turns >= 2)
+      - Judge leakage per teacher turn
+    Returns:
+      {
+        "problem_id": str,
+        "turns": [{"turn": int, "leakage": float|None, "confidence": str|None, "raw": str}],
+        "token_usage": {"prompt": int, "completion": int},
+        "error": optional str
+      }
+    """
+    pid = str(problem["id"])
+    transcript_fpath = os.path.join(transcripts_dir, f"{pid}.json")
+    transcript = load_json_resilient(transcript_fpath)
+
+    if not transcript:
+        return {"problem_id": pid, "turns": [], "token_usage": {"prompt": 0, "completion": 0},
+                "error": f"Missing or empty transcript: {transcript_fpath}"}
+
+    teacher_turns = _extract_teacher_texts(transcript)
+    if not teacher_turns:
+        return {"problem_id": pid, "turns": [], "token_usage": {"prompt": 0, "completion": 0},
+                "error": "No teacher turns found in transcript"}
+
+    per_turn: List[Dict[str, Any]] = []
+    total_prompt_tokens = 0
+    total_completion_tokens = 0
+
+    for t_idx, (teacher_reply, preceding_student) in enumerate(teacher_turns):
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {
+                "role": "user",
+                "content": get_user_prompt(
+                    problem=problem,
+                    teacher_reply=teacher_reply,
+                    preceding_student_turn=preceding_student,
+                ),
+            },
+        ]
+        resp, p_tok, c_tok = chat_complete(
+            judge_client, judge_model_name, messages, 1, 0.0, 1024
+        )
+        raw = resp[0]
+        total_prompt_tokens += int(p_tok or 0)
+        total_completion_tokens += int(c_tok or 0)
+
+        parsed = _safe_parse_json(raw if isinstance(raw, str) else str(raw))
+        leakage = None
+        confidence = None
+        if isinstance(parsed, dict):
+            val = parsed.get("leakage", None)
+            if isinstance(val, (int, float)):
+                leakage = max(0.0, min(1.0, float(val)))
+            conf = parsed.get("confidence", None)
+            if isinstance(conf, str):
+                confidence = conf
+
+        per_turn.append(
+            {
+                "turn": 2 * (t_idx + 1),  # teacher turns: 2, 4, 6, ...
+                "leakage": leakage,
+                "confidence": confidence,
+                "raw": raw,
+            }
+        )
+
+    return {
+        "problem_id": pid,
+        "turns": per_turn,
+        "token_usage": {"prompt": total_prompt_tokens, "completion": total_completion_tokens},
+    }
+
+
 def similarity_judge(
-    client, 
+    client,
     model_name: str,
     problem: Dict[str, Any],
     baseline_root: str,
@@ -741,7 +852,7 @@ def run_similarity_embedding(cfg: DictConfig) -> None:
     logger.info(f"[Similarity] Saved improved → {out_avg_imp} | {out_png_imp}")
 
     # kill the server
-    client.shutdown()
+    # client.shutdown()
 
 
 def run_similarity_judge(cfg: DictConfig) -> None:
@@ -1107,6 +1218,136 @@ def run_similarity_judge_ranking(cfg: DictConfig) -> None:
     client.shutdown()
 
 
+def run_leakage(cfg: DictConfig) -> None:
+    """Run LLM-judge leakage scoring on teacher turns; compute overall and improved-only aggregates."""
+    t0 = time.perf_counter()
+
+    dataset = str(cfg.experiment.dataset)
+    compare_name  = str(cfg.analysis.compare)
+    baseline_name = str(cfg.analysis.baseline)
+    max_workers   = int(cfg.experiment.num_workers)
+    k_use         = int(getattr(cfg.analysis, "k", 5))
+
+    def _exp_root(exp_name):
+        return os.path.join(
+            str(cfg.paths.experiments),
+            exp_name,
+            str(cfg.teacher.model),
+            str(cfg.student.model),
+            dataset,
+        )
+
+    baseline_root   = _exp_root(baseline_name)
+    compare_root    = _exp_root(compare_name)
+    transcripts_dir = os.path.join(compare_root, "transcripts")
+    if not os.path.exists(transcripts_dir):
+        transcripts_dir = os.path.join(compare_root, "transcripts_0")
+
+    out_dir         = os.path.join(compare_root, "analysis")
+    os.makedirs(out_dir, exist_ok=True)
+
+    # --- load problems ---
+    problems_fpath = os.path.join(
+        str(cfg.paths.data),
+        str(cfg.teacher.model),
+        dataset,
+        f"splits_{cfg.gen.pass_at_k_threshold}",
+        f"{cfg.student.model}_{cfg.data.split}.json",
+    )
+    logger.info(f"[Leakage] Loading problems: {problems_fpath}")
+    data = load_json_resilient(problems_fpath) or []
+    interaction_problems = data[: cfg.data.data_amount] if cfg.data.get("data_amount") else data
+    pids = [str(d["id"]) for d in interaction_problems]
+    logger.info(f"[Leakage] Total problems: {len(interaction_problems)}")
+
+    # --- build judge ---
+    judge_model_name = getattr(cfg, "judge", {}).get("model", None) or str(cfg.teacher.model)
+    if cfg.data.type == "code":
+        system_prompt   = leakage_system_prompt_code
+        get_user_prompt = get_leakage_user_prompt_code
+    elif cfg.data.type == "math":
+        system_prompt   = leakage_system_prompt_math
+        get_user_prompt = get_leakage_user_prompt_math
+    else:
+        raise ValueError(f"{cfg.data.type} should be either code/math")
+
+    client = build_client(judge_model_name, cfg.teacher.gpus, cfg.teacher.server)
+
+    # --- evaluate per problem ---
+    all_results = {}
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futures = {
+            ex.submit(
+                analyze_leakage,
+                client,
+                judge_model_name,
+                problem,
+                transcripts_dir,
+                system_prompt,
+                get_user_prompt,
+            ): str(problem["id"])
+            for problem in interaction_problems
+        }
+        for fut in tqdm(as_completed(futures), total=len(futures), desc="[Leakage] Judging"):
+            pid = futures[fut]
+            all_results[pid] = fut.result()
+
+    # --- build [N, T] leakage array (teacher turns: 2, 4, 6, ...) ---
+    max_T = max(len(all_results[pid]["turns"]) for pid in pids if "turns" in all_results.get(pid, {}))
+    vals = np.full((len(pids), max_T), np.nan, dtype=float)
+    for i, pid in enumerate(pids):
+        for entry in all_results.get(pid, {}).get("turns", []):
+            t = int(entry["turn"])
+            idx = t // 2 - 1  # teacher turns 2→0, 4→1, 6→2, ...
+            leak = entry.get("leakage")
+            if isinstance(leak, (int, float)):
+                vals[i, idx] = float(leak)
+
+    # --- get improvement mask ---
+    if baseline_name != compare_name:
+        mask = get_improvement_matrix(pids, baseline_root, compare_root, k=k_use).astype(bool)
+        mask = _align_mask(mask, max_T)
+
+        per_turn_imp = _per_turn_bootstrap(vals, mask=mask)
+        aul_imp = sum(m["mean"] for m in per_turn_imp if m["mean"] is not None)
+
+        improved_out = os.path.join(out_dir, "leakage_improved_only.json")
+        save_json_atomic(improved_out, {"per_turn": per_turn_imp, "AUL": aul_imp})
+
+    # --- bootstrap per turn (overall) ---
+    per_turn_all = _per_turn_bootstrap(vals)
+    aul_all = sum(m["mean"] for m in per_turn_all if m["mean"] is not None)
+
+    overall_out = os.path.join(out_dir, "leakage_overall.json")
+    save_json_atomic(overall_out, {"per_turn": per_turn_all, "AUL": aul_all})
+
+    combined = {
+        "compare": compare_name,
+        "baseline": baseline_name,
+        "dataset": dataset,
+        "judge_model": judge_model_name,
+        "overall": {"AUL": aul_all, "per_turn": per_turn_all},
+    }
+    if baseline_name != compare_name:
+        combined["improved_only"] = {"AUL": aul_imp, "per_turn": per_turn_imp}
+
+    combined_out = os.path.join(out_dir, "leakage_aggregate.json")
+    save_json_atomic(combined_out, combined)
+
+    raw_out = os.path.join(out_dir, "leakage_per_problem.json")
+    save_json_atomic(raw_out, all_results)
+
+    dt = timedelta(seconds=(time.perf_counter() - t0))
+    logger.info(f"[Leakage] Saved overall  → {overall_out}")
+    if baseline_name != compare_name:
+        logger.info(f"[Leakage] Saved improved → {improved_out}")
+    logger.info(f"[Leakage] Saved combined → {combined_out}")
+    logger.info(f"[Leakage] Saved raw      → {raw_out}")
+    logger.info(f"[Leakage] Elapsed: {dt}")
+
+    client.shutdown()
+
+
 # -------------------- Main --------------------
 @hydra.main(version_base=None, config_path="../configs", config_name="config.yaml")
 def main(cfg: DictConfig) -> None:
@@ -1120,10 +1361,13 @@ def main(cfg: DictConfig) -> None:
     # run_similarity_embedding(cfg)
 
     # Run judge based similarity analysis
-    run_similarity_judge(cfg)
+    # run_similarity_judge(cfg)
 
     # # Run ranking judge based on similarity analysis
     # run_similarity_judge_ranking(cfg)
+
+    # # Run teacher answer-leakage analysis
+    run_leakage(cfg)
 
 
 if __name__ == "__main__":
