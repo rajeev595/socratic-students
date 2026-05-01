@@ -327,7 +327,7 @@ def train_sft(
         eval_steps=eval_steps,
         save_strategy="steps",
         save_steps=eval_steps,
-        save_total_limit=1,
+        save_total_limit=2,
         # load_best_model_at_end=True,      # Causes OOM, turn it OFF
         metric_for_best_model="eval_loss",
         greater_is_better=False,
@@ -342,12 +342,26 @@ def train_sft(
     if os.path.isdir(sft_cfg.output_dir):
         last_checkpoint = get_last_checkpoint(sft_cfg.output_dir)
 
+    # For 8-bit/4-bit models, Trainer's internal load_adapter via load_state_dict
+    # can fail with "CUDA error: unspecified launch failure". Load the adapter on
+    # CPU first to avoid this, then let Trainer only restore optimizer/scheduler state.
+    if last_checkpoint is not None:
+        from peft import PeftModel
+        adapter_cfg = os.path.join(last_checkpoint, "adapter_config.json")
+        if os.path.exists(adapter_cfg):
+            logger.info(f"Pre-loading LoRA adapter from {last_checkpoint} onto CPU")
+            model = PeftModel.from_pretrained(
+                model, last_checkpoint, is_trainable=True,
+                low_cpu_mem_usage=True,
+            )
+            peft_cfg = None  # model already wrapped; don't re-wrap
+
     trainer = SFTTrainer(
         model=model,
         args=sft_cfg,
         train_dataset=train_ds,
         eval_dataset=val_ds,
-        peft_config=peft_cfg,     # create & train fresh LoRA
+        peft_config=peft_cfg,     # create & train fresh LoRA (None if resuming)
         processing_class=tokenizer,
     )
     trainer.train(resume_from_checkpoint=last_checkpoint)
@@ -444,6 +458,19 @@ def train_dpo(
     if os.path.isdir(dpo_cfg.output_dir):
         last_checkpoint = get_last_checkpoint(dpo_cfg.output_dir)
 
+    # Same workaround as SFT: pre-load LoRA adapter on CPU to avoid
+    # "CUDA error: unspecified launch failure" from Trainer's internal load_adapter.
+    if last_checkpoint is not None and peft_cfg is not None:
+        from peft import PeftModel
+        adapter_cfg = os.path.join(last_checkpoint, "adapter_config.json")
+        if os.path.exists(adapter_cfg):
+            logger.info(f"Pre-loading LoRA adapter from {last_checkpoint} onto CPU")
+            model = PeftModel.from_pretrained(
+                model, last_checkpoint, is_trainable=True,
+                low_cpu_mem_usage=True,
+            )
+            peft_cfg = None  # model already wrapped; don't re-wrap
+
     # ---- Trainer ----
     trainer = DPOTrainer(
         model=model,
@@ -539,7 +566,7 @@ def main(cfg: DictConfig) -> None:
             train_fpath=train_fpath_sft,
             val_fpath=val_fpath_sft,
             out_dir=ckpt_dir_sft,
-            use_8bit=cfg.train.sft_use_8bit,
+            use_kbit=cfg.train.sft_use_8bit,
             lora_r=cfg.train.lora_r,
             lora_alpha=cfg.train.lora_alpha,
             lora_dropout=cfg.train.lora_dropout,
@@ -549,7 +576,7 @@ def main(cfg: DictConfig) -> None:
             lr=cfg.train.sft_lr,
             epochs=cfg.train.sft_epochs,
             eval_steps=cfg.train.sft_eval_steps,
-            setup_for_training=setup_for_training_8bit if cfg.data.type == "math" else setup_for_training_4bit
+            setup_for_training=setup_for_training_8bit # if cfg.data.type == "math" else setup_for_training_4bit
         )
 
     # DPO
