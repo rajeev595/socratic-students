@@ -25,6 +25,7 @@ _MODEL_ALIASES: Dict[str, str] = {
     "llama8": "meta-llama/Llama-3.1-8B-Instruct",
     "llama3": "meta-llama/Llama-3.2-3B-Instruct",
     "llama1": "meta-llama/Llama-3.2-1B-Instruct",
+    "llama70": "meta-llama/Llama-3.3-70B-Instruct",
 
     "qwen1_5": "Qwen/Qwen2.5-1.5B-Instruct",
     "qwen3": "Qwen/Qwen2.5-3B-Instruct",
