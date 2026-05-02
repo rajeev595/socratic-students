@@ -1239,9 +1239,9 @@ def run_leakage(cfg: DictConfig) -> None:
 
     baseline_root   = _exp_root(baseline_name)
     compare_root    = _exp_root(compare_name)
-    transcripts_dir = os.path.join(compare_root, "transcripts")
+    transcripts_dir = os.path.join(compare_root, "transcripts_0")
     if not os.path.exists(transcripts_dir):
-        transcripts_dir = os.path.join(compare_root, "transcripts_0")
+        transcripts_dir = os.path.join(compare_root, "transcripts")
 
     out_dir         = os.path.join(compare_root, "analysis")
     os.makedirs(out_dir, exist_ok=True)

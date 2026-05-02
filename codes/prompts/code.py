@@ -158,6 +158,7 @@ Score the DEGREE OF ANSWER LEAKAGE on a scale from 0 to 1:
 - 1.0  → Full answer leak: provides actual code, a complete algorithm, or confirms the correct implementation in full.
 
 Guidelines:
+- CRITICAL: If the student's message already contains the correct code, algorithm, or complete solution, and the teacher is simply confirming it ("Exactly!", "That's correct!", "Your solution looks good!", "Great job!") — score 0.0. The teacher revealed nothing the student did not already know.
 - Confirming correct code or reasoning the student themselves already produced is NOT leakage.
 - Any specific implementation detail, logic, or code volunteered by the teacher (not echoed from the student) counts as leakage.
 - Use intermediate values (e.g., 0.35) for nuanced cases.

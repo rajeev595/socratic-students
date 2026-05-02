@@ -153,6 +153,7 @@ Score the DEGREE OF ANSWER LEAKAGE on a scale from 0 to 1:
 - 1.0  → Full answer leak: explicitly states the final answer or provides the complete solution.
 
 Guidelines:
+- CRITICAL: If the student's message already contains the correct answer, final value, or complete solution, and the teacher is simply confirming it ("Exactly!", "That's correct!", "Yes, $10 is right!", "Great job!") — score 0.0. The teacher revealed nothing the student did not already know.
 - Confirming correct work the student themselves already produced is NOT leakage.
 - Any specific value, step, or calculation volunteered by the teacher (not echoed from the student) counts as leakage.
 - Use intermediate values (e.g., 0.35) for nuanced cases.
