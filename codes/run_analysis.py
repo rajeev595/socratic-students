@@ -52,6 +52,11 @@ from codes.prompts.math import get_judge_leakage_user_prompt as get_leakage_user
 from codes.prompts.code import judge_leakage_system_prompt as leakage_system_prompt_code
 from codes.prompts.code import get_judge_leakage_user_prompt as get_leakage_user_prompt_code
 
+from codes.prompts.math import judge_question_type_system_prompt as qtype_system_prompt_math
+from codes.prompts.math import get_judge_question_type_user_prompt as get_qtype_user_prompt_math
+from codes.prompts.code import judge_question_type_system_prompt as qtype_system_prompt_code
+from codes.prompts.code import get_judge_question_type_user_prompt as get_qtype_user_prompt_code
+
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -616,7 +621,7 @@ def run_progress(cfg: DictConfig) -> None:
     else:
         raise ValueError(f"{cfg.data.type} should be either code/math")
 
-    client = build_client(judge_model_name, cfg.teacher.gpus, cfg.teacher.server)
+    client = build_client(judge_model_name, cfg.judge.gpus, cfg.judge.server)
 
     # --- evaluate per problem ---
     all_results = {}
@@ -1271,7 +1276,7 @@ def run_leakage(cfg: DictConfig) -> None:
     else:
         raise ValueError(f"{cfg.data.type} should be either code/math")
 
-    client = build_client(judge_model_name, cfg.teacher.gpus, cfg.teacher.server)
+    client = build_client(judge_model_name, cfg.judge.gpus, cfg.judge.server)
 
     # --- evaluate per problem ---
     all_results = {}
@@ -1348,6 +1353,252 @@ def run_leakage(cfg: DictConfig) -> None:
     client.shutdown()
 
 
+# -------------------- Question Type Analysis --------------------
+
+def _classify_qtypes_problem(
+    judge_client,
+    judge_model_name: str,
+    problem: Dict[str, Any],
+    transcripts_dir: str,
+    system_prompt: str,
+    get_user_prompt: Callable,
+) -> Dict[str, Any]:
+    """Classify question types (A-D) per student turn for one problem in one condition."""
+    pid = str(problem["id"])
+    turns = _load_turns(transcripts_dir, pid)
+    if not turns:
+        return {"problem_id": pid, "turns": [], "types": [], "justifications": [],
+                "error": f"Missing transcript: {transcripts_dir}/{pid}.json"}
+
+    types, justifications = [], []
+    for student_text in turns:
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": get_user_prompt(problem["prompt"], student_text)},
+        ]
+        resp, _, _ = chat_complete(judge_client, judge_model_name, messages, 1, 0.0, 256)
+        raw = resp[0] if isinstance(resp, (list, tuple)) else resp
+        parsed = _safe_parse_json(raw if isinstance(raw, str) else str(raw))
+        q_type = "A"
+        just = ""
+        if isinstance(parsed, dict):
+            v = str(parsed.get("type", "A")).upper()
+            if v in ("A", "B", "C", "D"):
+                q_type = v
+            just = str(parsed.get("justification", ""))
+        types.append(q_type)
+        justifications.append(just)
+
+    return {
+        "problem_id": pid,
+        "turns": [
+            {"turn": 2 * i + 1, "type": types[i], "justification": justifications[i]}
+            for i in range(len(types))
+        ],
+    }
+
+
+def _plot_qtype_distribution(
+    baseline_name: str,
+    compare_name: str,
+    baseline_dist: Dict,
+    compare_dist: Dict,
+    out_dir: str,
+) -> None:
+    TYPE_LABELS = ["A", "B", "C", "D"]
+    TYPE_COLORS = {"A": "#e74c3c", "B": "#f39c12", "C": "#3498db", "D": "#2ecc71"}
+    turns = sorted(baseline_dist.keys())
+    x = np.arange(len(turns))
+
+    _, axes = plt.subplots(1, 2, figsize=(10, 4), sharey=True)
+    for ax, dist, name in [(axes[0], baseline_dist, baseline_name), (axes[1], compare_dist, compare_name)]:
+        bottoms = np.zeros(len(turns))
+        for q_type in TYPE_LABELS:
+            vals = np.array([dist.get(t, {}).get(q_type, 0.0) for t in turns])
+            ax.bar(x, vals, bottom=bottoms, color=TYPE_COLORS[q_type], label=f"Type {q_type}", width=0.6)
+            bottoms += vals
+        ax.set_title(name.replace("_", r"\_"))
+        ax.set_xticks(x)
+        ax.set_xticklabels([f"T{t}" for t in turns])
+        ax.set_xlabel("Student Turn")
+        ax.set_ylim(0, 1.05)
+    axes[0].set_ylabel("Fraction of Questions")
+    axes[1].legend(loc="upper right", fontsize=9)
+    plt.suptitle("Question Type Distribution by Turn", fontsize=13)
+    plt.tight_layout()
+    out = os.path.join(out_dir, "question_type_distribution.png")
+    plt.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close()
+    logger.info(f"[QuestionType] Plot → {out}")
+
+
+def _plot_qtype_outcome(correlation_data: Dict, out_dir: str) -> None:
+    TYPE_LABELS = ["A", "B", "C", "D"]
+    TYPE_COLORS = {"A": "#e74c3c", "B": "#f39c12", "C": "#3498db", "D": "#2ecc71"}
+
+    by_type: Dict[str, List[float]] = {t: [] for t in TYPE_LABELS}
+    for info in correlation_data.values():
+        dom = info.get("dominant_type")
+        imp = info.get("improvement")
+        if dom in TYPE_LABELS and imp is not None:
+            by_type[dom].append(float(imp))
+
+    _, ax = plt.subplots(figsize=(6, 4))
+    data_for_plot = [by_type[t] for t in TYPE_LABELS]
+    labels = [f"Type {t}\n(n={len(by_type[t])})" for t in TYPE_LABELS]
+    bp = ax.boxplot(data_for_plot, patch_artist=True, labels=labels)
+    for patch, q_type in zip(bp["boxes"], TYPE_LABELS):
+        patch.set_facecolor(TYPE_COLORS[q_type])
+        patch.set_alpha(0.7)
+    ax.axhline(0, color="gray", linestyle="--", linewidth=0.8)
+    ax.set_ylabel(r"Pass@k Improvement (ODQS $-$ Unguided)")
+    ax.set_title("Outcome Improvement by Dominant Question Type")
+    plt.tight_layout()
+    out = os.path.join(out_dir, "question_type_outcome.png")
+    plt.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close()
+    logger.info(f"[QuestionType] Plot → {out}")
+
+
+def run_question_type(cfg: DictConfig) -> None:
+    """Classify student question types (A–D) for baseline vs compare; aggregate distribution and correlate with outcomes."""
+    t0 = time.perf_counter()
+
+    dataset       = str(cfg.experiment.dataset)
+    compare_name  = str(cfg.analysis.compare)
+    baseline_name = str(cfg.analysis.baseline)
+    max_workers   = int(cfg.experiment.num_workers)
+    k_use         = int(getattr(cfg.analysis, "k", 5))
+
+    def _exp_root(name):
+        return os.path.join(str(cfg.paths.experiments), name, str(cfg.teacher.model), str(cfg.student.model), dataset)
+
+    baseline_root = _exp_root(baseline_name)
+    compare_root  = _exp_root(compare_name)
+    out_dir       = os.path.join(compare_root, "analysis")
+    os.makedirs(out_dir, exist_ok=True)
+
+    def _transcripts_dir(root):
+        d = os.path.join(root, "transcripts_0")
+        return d if os.path.exists(d) else os.path.join(root, "transcripts")
+
+    baseline_transcripts = _transcripts_dir(baseline_root)
+    compare_transcripts  = _transcripts_dir(compare_root)
+
+    # Load problems
+    problems_fpath = os.path.join(
+        str(cfg.paths.data), str(cfg.teacher.model), dataset,
+        f"splits_{cfg.gen.pass_at_k_threshold}",
+        f"{cfg.student.model}_{cfg.data.split}.json",
+    )
+    data = load_json_resilient(problems_fpath) or []
+    interaction_problems = data[: cfg.data.data_amount] if cfg.data.get("data_amount") else data
+    pids = [str(d["id"]) for d in interaction_problems]
+    logger.info(f"[QuestionType] {len(pids)} problems | baseline={baseline_name} | compare={compare_name}")
+
+    # Select domain-specific prompts
+    if cfg.data.type == "code":
+        system_prompt   = qtype_system_prompt_code
+        get_user_prompt = get_qtype_user_prompt_code
+    elif cfg.data.type == "math":
+        system_prompt   = qtype_system_prompt_math
+        get_user_prompt = get_qtype_user_prompt_math
+    else:
+        raise ValueError(f"cfg.data.type must be 'code' or 'math', got: {cfg.data.type}")
+
+    # Build judge
+    judge_model_name = getattr(cfg, "judge", {}).get("model", None) or str(cfg.teacher.model)
+    client = build_client(judge_model_name, cfg.judge.gpus, cfg.judge.server)
+
+    TYPE_LABELS = ["A", "B", "C", "D"]
+
+    def _run_classification(transcripts_dir: str, label: str) -> Dict[str, Any]:
+        results: Dict[str, Any] = {}
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            futures = {
+                ex.submit(
+                    _classify_qtypes_problem,
+                    client, judge_model_name, problem,
+                    transcripts_dir, system_prompt, get_user_prompt,
+                ): str(problem["id"])
+                for problem in interaction_problems
+            }
+            for fut in tqdm(as_completed(futures), total=len(futures), desc=f"[QuestionType] {label}"):
+                pid = futures[fut]
+                results[pid] = fut.result()
+        return results
+
+    baseline_results = _run_classification(baseline_transcripts, baseline_name)
+    compare_results  = _run_classification(compare_transcripts,  compare_name)
+
+    all_results = {"baseline": baseline_results, "compare": compare_results}
+
+    # Save raw per-problem results
+    raw_out = os.path.join(out_dir, "question_type_all.json")
+    save_json_atomic(raw_out, all_results)
+
+    # Aggregate type distribution per turn per condition
+    def _aggregate_dist(results: Dict) -> Dict:
+        by_turn: Dict[int, List[str]] = {}
+        for pid in pids:
+            for entry in results.get(pid, {}).get("turns", []):
+                t_idx = (int(entry["turn"]) - 1) // 2
+                by_turn.setdefault(t_idx, []).append(entry["type"])
+        dist = {}
+        for t_idx, type_list in sorted(by_turn.items()):
+            n = len(type_list)
+            turn_id = 2 * t_idx + 1
+            dist[turn_id] = {t: round(type_list.count(t) / n, 4) for t in TYPE_LABELS}
+            dist[turn_id]["n"] = n
+        return dist
+
+    baseline_dist = _aggregate_dist(baseline_results)
+    compare_dist  = _aggregate_dist(compare_results)
+    dist_out = os.path.join(out_dir, "question_type_dist.json")
+    save_json_atomic(dist_out, {baseline_name: baseline_dist, compare_name: compare_dist})
+
+    # Correlate dominant question type with pass@k improvement
+    itemized         = load_json_resilient(os.path.join(compare_root,  "itemized_results.json")) or {}
+    baseline_itemized = load_json_resilient(os.path.join(baseline_root, "itemized_results.json")) or {}
+
+    correlation_data: Dict[str, Any] = {}
+    for pid in pids:
+        compare_turn_entries = compare_results.get(pid, {}).get("turns", [])
+        if not compare_turn_entries:
+            continue
+        compare_types = [e["type"] for e in compare_turn_entries]
+        dominant = max(TYPE_LABELS, key=lambda t: compare_types.count(t))
+        compare_res  = (itemized.get(pid) or {}).get("results") or {}
+        baseline_res = (baseline_itemized.get(pid) or {}).get("results") or {}
+        if not compare_res:
+            continue
+        final_turn = str(max(int(t) for t in compare_res))
+        compare_pass  = float((compare_res.get(final_turn)  or {}).get(str(k_use), 0.0) or 0.0)
+        baseline_pass = float((baseline_res.get(final_turn) or {}).get(str(k_use), 0.0) or 0.0)
+        correlation_data[pid] = {
+            "dominant_type":      dominant,
+            "type_counts":        {t: compare_types.count(t) for t in TYPE_LABELS},
+            "compare_pass_at_k":  compare_pass,
+            "baseline_pass_at_k": baseline_pass,
+            "improvement":        compare_pass - baseline_pass,
+        }
+
+    corr_out = os.path.join(out_dir, "question_type_correlation.json")
+    save_json_atomic(corr_out, correlation_data)
+
+    # Plots
+    _plot_qtype_distribution(baseline_name, compare_name, baseline_dist, compare_dist, out_dir)
+    _plot_qtype_outcome(correlation_data, out_dir)
+
+    dt = timedelta(seconds=(time.perf_counter() - t0))
+    logger.info(f"[QuestionType] Saved raw  → {raw_out}")
+    logger.info(f"[QuestionType] Saved dist → {dist_out}")
+    logger.info(f"[QuestionType] Saved corr → {corr_out}")
+    logger.info(f"[QuestionType] Elapsed: {dt}")
+
+    client.shutdown()
+
+
 # -------------------- Main --------------------
 @hydra.main(version_base=None, config_path="../configs", config_name="config.yaml")
 def main(cfg: DictConfig) -> None:
@@ -1367,7 +1618,9 @@ def main(cfg: DictConfig) -> None:
     # run_similarity_judge_ranking(cfg)
 
     # # Run teacher answer-leakage analysis
-    run_leakage(cfg)
+    # run_leakage(cfg)
+
+    run_question_type(cfg)
 
 
 if __name__ == "__main__":

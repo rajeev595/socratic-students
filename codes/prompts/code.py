@@ -145,6 +145,39 @@ Output JSON ONLY in this format:
 """
 
 
+# -------------------- Judge Question Type Prompts --------------------
+
+judge_question_type_system_prompt = """\
+You are a strict classifier of student messages in a coding tutoring session.
+Classify the student's message into exactly ONE type based on what the student contributes:
+
+A — Unfocused: generic help request, social filler, acknowledgment, or bare statement with no reasoning.
+    Examples: "I'm stuck.", "Got it, thanks!", "Any hints?", "I don't know how to start."
+B — Conceptual: asks about a concept, data structure, or language feature — no code attempt shown.
+    Examples: "What is a list comprehension?", "How does a dictionary work?", "What does 'camel case' mean?"
+C — Hypothesis: proposes a specific algorithm or approach for THIS problem, asks if it is correct.
+    Examples: "Should I use a dictionary here?", "I think I need to iterate over the list, right?"
+D — Grounded: shows a concrete code snippet or pseudocode attempt AND asks a targeted question about it.
+    Examples: "I wrote [code] but get IndexError on line 3 -- what's wrong?", "My loop [code] skips the last element -- why?"
+
+Rules:
+- No code shown, only social phrase or bare answer -> A.
+- Asks about a general concept without problem-specific code -> B.
+- Proposes a specific approach or algorithm, asks confirmation -> C.
+- Shows actual code or pseudocode AND asks a targeted question about it -> D.
+- Return only strict JSON.
+"""
+
+
+def get_judge_question_type_user_prompt(problem_prompt: str, student_message: str) -> str:
+    return (
+        f"Task:\n{problem_prompt}\n\n"
+        f"Student's message:\n{student_message}\n\n"
+        'Output strict JSON only:\n'
+        '{"type": "A" | "B" | "C" | "D", "justification": "one sentence (<=20 words)"}'
+    )
+
+
 # -------------------- Judge Leakage Prompts --------------------
 
 judge_leakage_system_prompt = """\
