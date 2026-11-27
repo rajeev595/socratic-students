@@ -1,3 +1,16 @@
+"""
+EXPERIMENTAL -- not used in the paper and not maintained.
+
+Group-relative policy optimisation over the scored candidate groups (*_grpo_iter0_*.jsonl) written by
+the ODQS collectors, as an alternative to DPO on preference pairs. It was explored early in the
+project and has not been run since; expect to debug it. The method reported in the paper is
+codes.run_sft_dpo.
+
+Usage:
+    accelerate launch -m codes.experimental.train_grpo student.model=qwen7 data.type=math \
+        experiment.dataset=gsm8k data.name=odqs data.source=self experiment.name=self_odqs_grpo
+"""
+
 import os
 import time
 import json
@@ -16,10 +29,22 @@ from transformers.trainer_utils import get_last_checkpoint
 
 from trl import SFTTrainer, SFTConfig
 
-from codes.utils.vars import set_envs
+from codes.utils.vars import set_envs, hf_cache_dir
 from codes.utils.llm.server import _MODEL_ALIASES
 
 logger = logging.getLogger(__name__)
+
+
+def _data_file(cfg: DictConfig, root: str, kind: str, i: int, split: str) -> str:
+    """
+    Path of one training-data file (kind = sft | dpo | grpo).
+    Peer-ODQS files (data.source=peer) carry the peer model in their name.
+    """
+    source = str(cfg.data.source)
+    if source not in ("self", "peer"):
+        raise ValueError(f"data.source must be 'self' or 'peer', got: {source!r}")
+    stem = f"{cfg.student.model}__{cfg.peer.model}__" if source == "peer" else f"{cfg.student.model}_"
+    return os.path.join(root, f"{stem}{kind}_iter{i}_{split}.jsonl")
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(name)s: %(message)s",
@@ -116,7 +141,7 @@ def setup_for_training(
         device_map=({"": local_rank} if use_4bit else None),
         low_cpu_mem_usage=False,
         torch_dtype=(torch.bfloat16 if use_4bit else None),
-        cache_dir=os.path.join(os.environ["HF_HOME"], "hub")
+        cache_dir=hf_cache_dir()
     )
 
     if tokenizer.pad_token is None and tokenizer.eos_token is not None:
@@ -401,7 +426,7 @@ def train_grpo(
         logger.info(f"[GRPO] Loading PEFT adapter from {init_adapter_dir}")
         model = PeftModel.from_pretrained(
             model, init_adapter_dir, is_trainable=True,
-            cache_dir=os.path.join(os.environ["HF_HOME"], "hub")
+            cache_dir=hf_cache_dir()
         )
         peft_cfg = None
 
@@ -413,12 +438,12 @@ def train_grpo(
             tokenizer.name_or_path,
             device_map="auto",
             torch_dtype=getattr(model, "dtype", torch.bfloat16),
-            cache_dir=os.path.join(os.environ["HF_HOME"], "hub")
+            cache_dir=hf_cache_dir()
         )
         if use_existing_adapter:
             ref_model = PeftModel.from_pretrained(
                 ref_model, init_adapter_dir, is_trainable=False,
-                cache_dir=os.path.join(os.environ["HF_HOME"], "hub")
+                cache_dir=hf_cache_dir()
             )
         for p in ref_model.parameters():
             p.requires_grad_(False)
@@ -496,7 +521,7 @@ def _free_cuda(*objs):
 # =========================
 # Hydra entry (SFT -> GRPO)
 # =========================
-@hydra.main(version_base=None, config_path="../configs", config_name="config.yaml")
+@hydra.main(version_base=None, config_path="../../configs", config_name="config.yaml")
 def main(cfg: DictConfig) -> None:
     start_time = time.perf_counter()
 
@@ -507,14 +532,14 @@ def main(cfg: DictConfig) -> None:
     tokenizer = AutoTokenizer.from_pretrained(
         student_name,
         use_fast=True,
-        cache_dir=os.path.join(os.environ["HF_HOME"], "hub")
+        cache_dir=hf_cache_dir()
     )
     if tokenizer.pad_token is None and tokenizer.eos_token is not None:
         tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "right"
     tokenizer.truncation_side = "right"
 
-    root = os.path.join(str(cfg.paths.data), str(cfg.teacher.model), str(cfg.experiment.dataset), "rlhf")
+    root = os.path.join(str(cfg.paths.data), str(cfg.teacher.model), str(cfg.experiment.dataset), str(cfg.data.name))
     base_ckpt = os.path.join(
         str(cfg.paths.experiments), str(cfg.experiment.name),
         str(cfg.teacher.model), str(cfg.student.model),
@@ -525,21 +550,16 @@ def main(cfg: DictConfig) -> None:
     ckpt_dir_sft = None
     if cfg.train.sft_epochs > 0:
         train_fpath_sft, val_fpath_sft = [], []
-        for i in range(cfg.gen.dagger_iter + 1):
-            if "self" in cfg.experiment.name:
-                train_fpath = os.path.join(root, f"{cfg.student.model}_sft_iter{i}_train.jsonl")
-                val_fpath = os.path.join(root, f"{cfg.student.model}_sft_iter{i}_val.jsonl")
-
-            if "peer" in cfg.experiment.name:
-                train_fpath = os.path.join(root, f"{cfg.student.model}__{cfg.guide.model}__sft_iter{i}_train.jsonl")
-                val_fpath = os.path.join(root, f"{cfg.student.model}__{cfg.guide.model}__sft_iter{i}_val.jsonl")
+        for i in range(cfg.gen.iteration + 1):
+            train_fpath = _data_file(cfg, root, "sft", i, "train")
+            val_fpath = _data_file(cfg, root, "sft", i, "val")
             
             train_fpath_sft.append(train_fpath)
             val_fpath_sft.append(val_fpath)
 
         ckpt_dir_sft = os.path.join(
             base_ckpt, 
-            f"sft_{cfg.gen.dagger_iter}"
+            f"sft_{cfg.gen.iteration}"
         )
         os.makedirs(ckpt_dir_sft, exist_ok=True)
         train_sft(
@@ -560,20 +580,15 @@ def main(cfg: DictConfig) -> None:
     # GRPO
     if cfg.train.grpo_epochs > 0:
         train_fpath_grpo, val_fpath_grpo = [], []
-        for i in range(cfg.gen.dagger_iter + 1):
-            if "self" in cfg.experiment.name:
-                train_fpath = os.path.join(root, f"{cfg.student.model}_grpo_iter{i}_train.jsonl")
-                val_fpath = os.path.join(root, f"{cfg.student.model}_grpo_iter{i}_val.jsonl")
-
-            if "peer" in cfg.experiment.name:
-                train_fpath = os.path.join(root, f"{cfg.student.model}__{cfg.guide.model}__grpo_iter{i}_train.jsonl")
-                val_fpath = os.path.join(root, f"{cfg.student.model}__{cfg.guide.model}__grpo_iter{i}_val.jsonl")
+        for i in range(cfg.gen.iteration + 1):
+            train_fpath = _data_file(cfg, root, "grpo", i, "train")
+            val_fpath = _data_file(cfg, root, "grpo", i, "val")
             
             train_fpath_grpo.append(train_fpath)
             val_fpath_grpo.append(val_fpath)
 
         ckpt_dir_grpo = os.path.join(
-            base_ckpt, f"grpo_{cfg.gen.dagger_iter}"
+            base_ckpt, f"grpo_{cfg.gen.iteration}"
         )
         os.makedirs(ckpt_dir_grpo, exist_ok=True)
         train_grpo(
@@ -582,7 +597,7 @@ def main(cfg: DictConfig) -> None:
             val_fpath=val_fpath_grpo,
             init_adapter_dir=ckpt_dir_sft,
             out_dir=ckpt_dir_grpo,
-            use_4bit=cfg.train.rlhf_use_4bit,
+            use_4bit=cfg.train.grpo_use_4bit,
             lora_r=cfg.train.lora_r,
             lora_alpha=cfg.train.lora_alpha,
             lora_dropout=cfg.train.lora_dropout,

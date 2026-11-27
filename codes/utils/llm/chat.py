@@ -1,10 +1,6 @@
 """
 Lightweight LLM utilities.
 
-- `build_client`: resolve a model nickname → (fully qualified model id, OpenAI-compatible client).
-  Known nicknames are served via local OpenAI-compatible servers at http://localhost:{port}/v1.
-  Any other string is treated as a first-party OpenAI model id (e.g., "gpt-4o").
-
 - `chat_complete`: thin wrapper over Chat Completions that:
     * passes through temperature, n, max_tokens,
     * returns (list of texts, prompt_tokens, completion_tokens),

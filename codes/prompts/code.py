@@ -21,7 +21,7 @@ You may ask the tutor any relevant questions (clarification, implementation deta
 """
 
 
-def get_humaneval_student_sys_cot_prompt(problem: Dict) -> str:
+def get_humaneval_student_sys_scaffolded_prompt(problem: Dict) -> str:
     return f"""\
 You are an AI assistant tasked with solving Python coding problems. To help you improve your skills, your coding tutor has posed the following problem:
 

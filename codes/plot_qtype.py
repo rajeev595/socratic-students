@@ -1,14 +1,15 @@
 """
 Regenerate question-type distribution and outcome plots from existing JSON data.
 Reads all question_type_dist_*.json and question_type_correlation_*.json files
-under experiments/ and saves updated PDFs next to them.
+under the experiments root and saves updated PDFs next to them.
 
 Usage:
-    python -m codes.plot_qtype
+    python -m codes.plot_qtype [--experiments ./experiments]
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 from pathlib import Path
 from typing import Dict, List
@@ -54,19 +55,18 @@ TYPE_COLORS = {
 # All fills are light, so value labels are black throughout.
 TYPE_TEXT_COLORS = {"A": "black", "B": "black", "C": "black", "D": "black"}
 
-EXP_DIR = Path("/playpen-ssd2/ambati/interact_plus/experiments")
 
 PAPER_NAMES = {
-    "unguided":                           "No Training",
-    "pre_cot":                            "No Training",
-    "mid_cot":                            "No Training",
-    "cot":                                "CoT",
-    "selfguided_zero_margin":             "Self-ODQS",
-    "selfguided_zero_margin_pre_cot":     "Self-ODQS",
-    "selfguided_zero_margin_mid_cot":     "Self-ODQS",
-    "peerguided_zero_margin":             "Peer-ODQS",
-    "peerguided_zero_margin_pre_cot":     "Peer-ODQS",
-    "peerguided_zero_margin_mid_cot":     "Peer-ODQS",
+    "unscaffolded":                           "No Training",
+    "pre_assessment":                            "No Training",
+    "mid_assessment":                            "No Training",
+    "scaffolded":                         "Scaffolded",
+    "self_odqs":             "Self-ODQS",
+    "self_odqs_pre_assessment":     "Self-ODQS",
+    "self_odqs_mid_assessment":     "Self-ODQS",
+    "peer_odqs":             "Peer-ODQS",
+    "peer_odqs_pre_assessment":     "Peer-ODQS",
+    "peer_odqs_mid_assessment":     "Peer-ODQS",
 }
 
 def _paper_name(name: str) -> str:
@@ -179,7 +179,11 @@ def plot_outcome(correlation_data: Dict, out_dir: Path, tag: str = "") -> None:
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
-    for dist_file in sorted(EXP_DIR.rglob("question_type_dist_*.json")):
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--experiments", default="./experiments", help="experiments root (paths.experiments)")
+    args = parser.parse_args()
+
+    for dist_file in sorted(Path(args.experiments).rglob("question_type_dist_*.json")):
         out_dir = dist_file.parent
         data = json.loads(dist_file.read_text())
         names = list(data.keys())
@@ -192,7 +196,7 @@ def main():
         compare_dist  = {k: v for k, v in data[compare_name].items()}
 
         # derive tag from filename: question_type_dist_{tag}.json
-        stem = dist_file.stem  # e.g. question_type_dist_selfguided_vs_unguided
+        stem = dist_file.stem  # e.g. question_type_dist_self_odqs_vs_unscaffolded
         tag  = stem[len("question_type_dist_"):]
 
         plot_distribution(baseline_name, compare_name,

@@ -1,8 +1,8 @@
 """
-Analyze human leakage annotation results from Prolific/AMT.
+Analyze human leakage annotation results from Amazon Mechanical Turk.
 
 Inputs:
-  --human_results   : CSV downloaded from Prolific/AMT (one row per annotation)
+  --human_results   : CSV downloaded from Amazon Mechanical Turk (one row per annotation)
   --samples         : leakage_samples.jsonl (from extract_leakage_samples.py)
   --llm_scores      : JSON file with LLM judge scores {item_id -> score}
                       (or compute from experiments/*/analysis/leakage_*.json)
@@ -15,7 +15,7 @@ Outputs:
 
 Usage:
   python -m codes.human_eval.analyze_leakage_results \
-      --human_results codes/human_eval/data/prolific_results.csv \
+      --human_results experiments/human_eval/data/amt_results.csv \
       --samples experiments/human_eval/data/leakage_samples.jsonl
 """
 
@@ -170,7 +170,7 @@ LABEL_TO_SCORE = {1: 0.0, 2: 0.25, 3: 0.50, 4: 0.75, 5: 1.0}
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--human_results", required=True,
-                        help="CSV from Prolific: columns item_id, worker_id, rating (1-5)")
+                        help="AMT results CSV: columns item_id, worker_id, rating (1-5)")
     parser.add_argument("--samples", required=True,
                         help="leakage_samples.jsonl with condition and item_id")
     parser.add_argument("--llm_scores", default=None,
@@ -250,7 +250,7 @@ def main():
 
     print("\n=== PER-CONDITION HUMAN LEAKAGE SCORES (mean ± bootstrap_std) ===")
     condition_summary = {}
-    for cond in ["unguided", "cot", "pre_cot", "mid_cot", "self_odqs", "peer_odqs"]:
+    for cond in ["unscaffolded", "scaffolded", "pre_assessment", "mid_assessment", "self_odqs", "peer_odqs"]:
         vals = condition_scores.get(cond, [])
         if not vals:
             print(f"  {cond}: no data")
@@ -259,17 +259,17 @@ def main():
         print(f"  {cond}: {stats['mean']:.3f} ± {stats['std']:.3f}  (n={stats['n']})")
         condition_summary[cond] = {"mean": stats["mean"], "std": stats["std"], "n": stats["n"]}
 
-    # Delta between conditions (unguided vs each trained method)
-    if "unguided" in condition_scores:
-        print("\n=== DELTA vs UNGUIDED (bootstrap, 95% CI, two-tailed p) ===")
-        for cond in ["self_odqs", "peer_odqs", "cot", "mid_cot"]:
+    # Delta between conditions (unscaffolded vs each trained method)
+    if "unscaffolded" in condition_scores:
+        print("\n=== DELTA vs UNSCAFFOLDED (bootstrap, 95% CI, two-tailed p) ===")
+        for cond in ["self_odqs", "peer_odqs", "scaffolded", "mid_assessment"]:
             vals = condition_scores.get(cond, [])
             if not vals:
                 continue
-            delta, lo, hi, p = bootstrap_delta_ci(condition_scores["unguided"], vals)
+            delta, lo, hi, p = bootstrap_delta_ci(condition_scores["unscaffolded"], vals)
             sig = "**" if p < 0.05 else ("*" if p < 0.10 else "ns")
-            print(f"  {cond} - unguided: Δ={delta:+.3f}  95% CI [{lo:+.3f}, {hi:+.3f}]  p={p:.3f} {sig}")
-            condition_summary[cond]["delta_vs_unguided"] = {"delta": delta, "ci_lo": lo, "ci_hi": hi, "p": p}
+            print(f"  {cond} - unscaffolded: Δ={delta:+.3f}  95% CI [{lo:+.3f}, {hi:+.3f}]  p={p:.3f} {sig}")
+            condition_summary[cond]["delta_vs_unscaffolded"] = {"delta": delta, "ci_lo": lo, "ci_hi": hi, "p": p}
 
     # LLM vs human correlation
     llm_corr_results = None
@@ -312,13 +312,13 @@ def main():
         json.dump(out, f, indent=2)
     print(f"\nResults saved → {args.out}")
 
-    print("\n=== REBUTTAL SUMMARY ===")
+    print("\n=== SUMMARY ===")
     print("Key claim to verify: leakage scores are CONSISTENT ACROSS METHODS.")
     if condition_summary:
         vals = [v["mean"] for v in condition_summary.values()]
         spread = max(vals) - min(vals)
         print(f"  Max spread across conditions: {spread:.3f}")
-        print(f"  (If spread < 0.1, conditions are effectively equivalent → supports rebuttal claim)")
+        print(f"  (If spread < 0.1, conditions are effectively equivalent)")
     if llm_corr_results and "pooled" in llm_corr_results:
         print(f"  Judge calibration (Spearman rho, pooled): {llm_corr_results['pooled']['spearman_rho']:.3f}")
     else:

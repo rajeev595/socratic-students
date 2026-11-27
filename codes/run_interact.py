@@ -1,6 +1,23 @@
-# interact_eval.py
-# Combined runner: INTERACT ↔ EVALUATE (inline, per student turn)
-# Hydra-based, matching your repo-2 style.
+"""
+Student-teacher interaction with inline evaluation.
+
+For every problem the student and teacher alternate for `experiment.total_turns` messages.
+Before each student question the student is asked for a direct answer `gen.num_samples`
+times and Pass@k is computed, giving one score per questioning turn.
+
+  experiment.scaffolded        False = Unscaffolded prompt, True = Scaffolded prompt
+  experiment.assessment_turn   -1 = none, 1 = Pre-Assessment, 5 = Mid-Assessment
+  student.lora.{name,path}     evaluate an ODQS-trained student
+
+Output (under <experiments>/<experiment.name>/<teacher>/<student>/<dataset>/):
+  transcripts_0/<problem id>.json   the conversation
+  itemized_results_0.json           per-problem Pass@k at every turn and the sampled answers
+  aggregate_results_0.json          bootstrapped mean/std of Pass@k at every turn
+
+Usage:
+    python -m codes.run_interact student.model=qwen7 data.type=math experiment.dataset=gsm8k \
+        experiment.name=scaffolded experiment.scaffolded=True
+"""
 
 import os
 import time
@@ -108,10 +125,10 @@ def interact(
     client: OpenAI,
     model_name: str,
     temperature: float,
-    use_cot: bool = False,
+    use_scaffold: bool = False,
 ):
     # Build messages for this turn
-    sys_prompt = _select_sys_prompt(data_type, use_cot, is_student, problem)
+    sys_prompt = _select_sys_prompt(data_type, use_scaffold, is_student, problem)
     starting_with_user = True if is_student else False
     messages = [{"role": "system", "content": sys_prompt}] + format_messages(
         texts, starting_with_user=starting_with_user
@@ -207,7 +224,7 @@ def run_problem(
     assessment_turn: int,
     start_from_turn: int = 1,
     total_turns: int = 10,
-    use_cot: bool = False,
+    use_scaffold: bool = False,
     is_ood: bool = False,
 ) -> Tuple[
     List[Dict[str, Any]],
@@ -314,7 +331,7 @@ def run_problem(
                 student_client if is_student else teacher_client,
                 student_name if is_student else teacher_name,
                 student_temperature if is_student else teacher_temperature,
-                use_cot
+                use_scaffold
             )
 
             # Update chat transcript and token counts
@@ -351,28 +368,7 @@ def run_problem(
 # ---------- main combined loop ----------
 @hydra.main(version_base=None, config_path="../configs", config_name="config.yaml")
 def main(cfg: DictConfig) -> None:
-    """
-    Hydra config expectations (mirrors your repo-2 style):
-      experiment.dataset: "code" | "math"
-      interact:
-        total_turns: int
-        start_from_turn: int
-        assessment_turn: int
-        use_cot: bool
-      eval:
-        k_values: [int, ...]
-        num_samples: int
-      paths:
-        data: <root to curated sets>     (e.g., ./data)
-        experiments: <output root>       (e.g., ./runs)
-      teacher:
-        model: str
-        temperature: float
-      student:
-        model: str
-        temperature: float
-      data.data_amount: optional int to limit #problems
-    """
+    """Run the interaction loop over the problem set (see the module docstring and configs/config.yaml)."""
     start_time = time.perf_counter()  # ---- start timer ----
 
     # set the OpenAI key env variable, HF HOME
@@ -383,7 +379,7 @@ def main(cfg: DictConfig) -> None:
     total_turns: int = int(cfg.experiment.total_turns)
     start_from_turn: int = int(cfg.experiment.start_from_turn)
     assessment_turn: int = int(cfg.experiment.assessment_turn)
-    use_cot: bool = bool(cfg.experiment.cot)
+    use_scaffold: bool = bool(cfg.experiment.scaffolded)
     k_values: List[int] = list(cfg.gen.k_values)
     num_samples: int = min(int(cfg.gen.num_samples), max(k_values))
 
@@ -396,7 +392,7 @@ def main(cfg: DictConfig) -> None:
         dataset,
     )
     os.makedirs(exp_dir, exist_ok=True)
-    transcripts_dir = os.path.join(exp_dir, f"transcripts_{cfg.gen.dagger_iter}")
+    transcripts_dir = os.path.join(exp_dir, f"transcripts_{cfg.gen.iteration}")
     os.makedirs(transcripts_dir, exist_ok=True)
 
     # Collect results across problems for aggregation
@@ -404,7 +400,7 @@ def main(cfg: DictConfig) -> None:
     all_results = {}
 
     # Load existing results
-    results_fpath = os.path.join(exp_dir, f"itemized_results_{cfg.gen.dagger_iter}.json")
+    results_fpath = os.path.join(exp_dir, f"itemized_results_{cfg.gen.iteration}.json")
     if os.path.exists(results_fpath):
         all_results = load_json_resilient(results_fpath)
         for _, example in all_results.items():
@@ -487,7 +483,7 @@ def main(cfg: DictConfig) -> None:
                 assessment_turn,
                 start_from_turn,
                 total_turns,
-                use_cot,
+                use_scaffold,
                 cfg.experiment.ood
             ): ip["id"] for (ip, ep) in zip(interaction_problems_chunk, evaluation_problems_chunk)}
 
@@ -528,7 +524,7 @@ def main(cfg: DictConfig) -> None:
 
     # compute bootstrapped aggregate results
     avg_results = bootstrap_aggregate(all_results)
-    save_json_atomic(os.path.join(exp_dir, f"aggregate_results_{cfg.gen.dagger_iter}.json"), avg_results)
+    save_json_atomic(os.path.join(exp_dir, f"aggregate_results_{cfg.gen.iteration}.json"), avg_results)
 
     # Log aggregate summary
     for turn in sorted(avg_results.keys()):

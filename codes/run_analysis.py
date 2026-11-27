@@ -111,6 +111,12 @@ def _extract_teacher_texts(transcript: List[Dict[str, Any]]) -> List[tuple]:
     return result
 
 
+def _transcripts_dir(root: str) -> str:
+    """Transcripts folder of an experiment: transcripts_0 (codes.run_interact) or transcripts (codes.run_cross_eval)."""
+    d = os.path.join(root, "transcripts_0")
+    return d if os.path.exists(d) else os.path.join(root, "transcripts")
+
+
 def _load_turns(transcripts_dir: str, pid: str) -> dict:
     """
     Loads transcripts_<iter> and extracts up to `turns` full student turns per problem.
@@ -277,7 +283,7 @@ def get_improvement_matrix(
             [int(t) for t in baseline_results[pid]["results"].keys()],
             key=int
         )
-        # Exclude turn 1? (your original loop started at idx=1 -> turn 3)
+        # Skip turn 1 (no question has been asked yet)
         # Keep that behavior:
         row = []
         for t in turns:
@@ -481,8 +487,8 @@ def similarity_judge(
     pid = problem["id"]
 
     # load turns and pad/truncate to T
-    baseline_turns = _load_turns(os.path.join(baseline_root, "transcripts"), pid)
-    compare_turns = _load_turns(os.path.join(compare_root,  "transcripts"), pid)
+    baseline_turns = _load_turns(_transcripts_dir(baseline_root), pid)
+    compare_turns = _load_turns(_transcripts_dir(compare_root), pid)
     if not baseline_turns or not compare_turns:
         return
 
@@ -538,8 +544,8 @@ def similarity_rank_judge(
     pid = problem["id"]
     problem_prompt = problem["prompt"]
 
-    baseline_turns = _load_turns(os.path.join(baseline_root, "transcripts"), pid)  # list[str]
-    compare_turns  = _load_turns(os.path.join(compare_root,  "transcripts"), pid)  # list[str]
+    baseline_turns = _load_turns(_transcripts_dir(baseline_root), pid)  # list[str]
+    compare_turns  = _load_turns(_transcripts_dir(compare_root), pid)  # list[str]
     if not baseline_turns or not compare_turns:
         return {
             "problem_id": pid,
@@ -619,7 +625,7 @@ def run_progress(cfg: DictConfig) -> None:
 
     baseline_root = _exp_root(baseline_name)
     compare_root  = _exp_root(compare_name)
-    transcripts_dir = os.path.join(compare_root, "transcripts")
+    transcripts_dir = _transcripts_dir(compare_root)
     out_dir = os.path.join(compare_root, "analysis")
     os.makedirs(out_dir, exist_ok=True)
 
@@ -775,8 +781,8 @@ def run_similarity_embedding(cfg: DictConfig) -> None:
     per_problem = []
 
     for pid in tqdm(interaction_problems, desc="[Similarity] Matrices"):
-        baseline_turns = _load_turns(os.path.join(baseline_root, "transcripts"), pid)
-        compare_turns = _load_turns(os.path.join(compare_root, "transcripts"), pid)
+        baseline_turns = _load_turns(_transcripts_dir(baseline_root), pid)
+        compare_turns = _load_turns(_transcripts_dir(compare_root), pid)
 
         E1 = model.encode(baseline_turns, normalize_embeddings=True, batch_size=batch_size, show_progress_bar=False)
         E2 = model.encode(compare_turns, normalize_embeddings=True, batch_size=batch_size, show_progress_bar=False)
@@ -1271,9 +1277,7 @@ def run_leakage(cfg: DictConfig) -> None:
 
     baseline_root   = _exp_root(baseline_name)
     compare_root    = _exp_root(compare_name)
-    transcripts_dir = os.path.join(compare_root, "transcripts_0")
-    if not os.path.exists(transcripts_dir):
-        transcripts_dir = os.path.join(compare_root, "transcripts")
+    transcripts_dir = _transcripts_dir(compare_root)
 
     out_dir         = os.path.join(compare_root, "analysis")
     os.makedirs(out_dir, exist_ok=True)
@@ -1425,37 +1429,37 @@ def _classify_qtypes_problem(
 
 
 _QTYPE_PAPER_NAMES = {
-    "unguided":                        "Unscaffolded",
-    "cot":                             "Scaffolded",
-    "pre_cot":                         "Pre-Assessment",
-    "mid_cot":                         "Mid-Assessment",
-    "selfguided_zero_margin_pre_cot":  "Self-ODQS",
-    "selfguided_zero_margin_mid_cot":  "Self-ODQS",
-    "selfguided_zero_margin":          "Self-ODQS",
-    "peerguided_zero_margin_pre_cot":  "Peer-ODQS",
-    "peerguided_zero_margin_mid_cot":  "Peer-ODQS",
+    "unscaffolded":                        "Unscaffolded",
+    "scaffolded":                             "Scaffolded",
+    "pre_assessment":                         "Pre-Assessment",
+    "mid_assessment":                         "Mid-Assessment",
+    "self_odqs_pre_assessment":  "Self-ODQS",
+    "self_odqs_mid_assessment":  "Self-ODQS",
+    "self_odqs":          "Self-ODQS",
+    "peer_odqs_pre_assessment":  "Peer-ODQS",
+    "peer_odqs_mid_assessment":  "Peer-ODQS",
 }
 
 # Human-readable suptitles keyed by (compare, baseline)
 _COMPARISON_TITLES: dict = {
     # Scaffolding effect
-    ("cot",                            "unguided"):  "Scaffolded vs. Unscaffolded",
+    ("scaffolded",                            "unscaffolded"):  "Scaffolded vs. Unscaffolded",
     # Assessment effect (scaffold vs scaffold + assessment)
-    ("pre_cot",                        "cot"):       "Pre-Assessment vs. No Assessment",
-    ("mid_cot",                        "cot"):       "Mid-Assessment vs. No Assessment",
+    ("pre_assessment",                        "scaffolded"):       "Pre-Assessment vs. No Assessment",
+    ("mid_assessment",                        "scaffolded"):       "Mid-Assessment vs. No Assessment",
     # Assessment vs unscaffolded (combined effect)
-    ("pre_cot",                        "unguided"):  "Pre-Assessment vs. Unscaffolded",
-    ("mid_cot",                        "unguided"):  "Mid-Assessment vs. Unscaffolded",
+    ("pre_assessment",                        "unscaffolded"):  "Pre-Assessment vs. Unscaffolded",
+    ("mid_assessment",                        "unscaffolded"):  "Mid-Assessment vs. Unscaffolded",
     # Training effect (same scaffold, trained vs untrained)
-    ("selfguided_zero_margin_pre_cot", "pre_cot"):   "Self-ODQS vs. No Training",
-    ("selfguided_zero_margin_mid_cot", "mid_cot"):   "Self-ODQS vs. No Training",
-    ("peerguided_zero_margin_pre_cot", "pre_cot"):   "Peer-ODQS vs. No Training",
-    ("peerguided_zero_margin_mid_cot", "mid_cot"):   "Peer-ODQS vs. No Training",
+    ("self_odqs_pre_assessment", "pre_assessment"):   "Self-ODQS vs. No Training",
+    ("self_odqs_mid_assessment", "mid_assessment"):   "Self-ODQS vs. No Training",
+    ("peer_odqs_pre_assessment", "pre_assessment"):   "Peer-ODQS vs. No Training",
+    ("peer_odqs_mid_assessment", "mid_assessment"):   "Peer-ODQS vs. No Training",
     # Combined effect (trained vs unscaffolded)
-    ("selfguided_zero_margin_pre_cot", "unguided"):  "Self-ODQS vs. Unscaffolded",
-    ("selfguided_zero_margin_mid_cot", "unguided"):  "Self-ODQS vs. Unscaffolded",
-    ("peerguided_zero_margin_pre_cot", "unguided"):  "Peer-ODQS vs. Unscaffolded",
-    ("peerguided_zero_margin_mid_cot", "unguided"):  "Peer-ODQS vs. Unscaffolded",
+    ("self_odqs_pre_assessment", "unscaffolded"):  "Self-ODQS vs. Unscaffolded",
+    ("self_odqs_mid_assessment", "unscaffolded"):  "Self-ODQS vs. Unscaffolded",
+    ("peer_odqs_pre_assessment", "unscaffolded"):  "Peer-ODQS vs. Unscaffolded",
+    ("peer_odqs_mid_assessment", "unscaffolded"):  "Peer-ODQS vs. Unscaffolded",
 }
 
 
@@ -1465,14 +1469,14 @@ def _qtype_paper_name(name: str) -> str:
 
 # Context-specific subplot label overrides: (compare, baseline, condition) → label
 _CONTEXT_SUBPLOT_NAMES: dict = {
-    # pre_cot/mid_cot as the no-training baseline for ODQS comparisons
-    ("selfguided_zero_margin_pre_cot", "pre_cot",  "pre_cot"):  "No Training",
-    ("selfguided_zero_margin_mid_cot", "mid_cot",  "mid_cot"):  "No Training",
-    ("peerguided_zero_margin_pre_cot", "pre_cot",  "pre_cot"):  "No Training",
-    ("peerguided_zero_margin_mid_cot", "mid_cot",  "mid_cot"):  "No Training",
-    # cot as the no-assessment baseline for assessment comparisons
-    ("pre_cot",                        "cot",      "cot"):      "No Assessment",
-    ("mid_cot",                        "cot",      "cot"):      "No Assessment",
+    # pre_assessment/mid_assessment as the no-training baseline for ODQS comparisons
+    ("self_odqs_pre_assessment", "pre_assessment",  "pre_assessment"):  "No Training",
+    ("self_odqs_mid_assessment", "mid_assessment",  "mid_assessment"):  "No Training",
+    ("peer_odqs_pre_assessment", "pre_assessment",  "pre_assessment"):  "No Training",
+    ("peer_odqs_mid_assessment", "mid_assessment",  "mid_assessment"):  "No Training",
+    # scaffolded as the no-assessment baseline for assessment comparisons
+    ("pre_assessment",                        "scaffolded",      "scaffolded"):      "No Assessment",
+    ("mid_assessment",                        "scaffolded",      "scaffolded"):      "No Assessment",
 }
 
 
@@ -1640,10 +1644,6 @@ def run_question_type(cfg: DictConfig) -> None:
     out_dir       = os.path.join(compare_root, "analysis")
     os.makedirs(out_dir, exist_ok=True)
 
-    def _transcripts_dir(root):
-        d = os.path.join(root, "transcripts_0")
-        return d if os.path.exists(d) else os.path.join(root, "transcripts")
-
     baseline_transcripts = _transcripts_dir(baseline_root)
     compare_transcripts  = _transcripts_dir(compare_root)
 
@@ -1773,27 +1773,25 @@ def run_question_type(cfg: DictConfig) -> None:
 
 
 # -------------------- Main --------------------
+ANALYSIS_TASKS = {
+    "progress": run_progress,                         # per-turn reasoning progress (LLM judge)
+    "similarity_embedding": run_similarity_embedding, # question similarity via sentence embeddings
+    "similarity_judge": run_similarity_judge,         # question similarity via LLM judge
+    "similarity_rank": run_similarity_judge_ranking,  # question similarity via LLM ranking judge
+    "leakage": run_leakage,                           # teacher answer leakage (LLM judge), mean across turns
+    "question_type": run_question_type,               # question-type distribution (LLM judge)
+}
+
+
 @hydra.main(version_base=None, config_path="../configs", config_name="config.yaml")
 def main(cfg: DictConfig) -> None:
     # envs
     set_envs(cfg.paths.openai_api_key_fpath, cfg.paths.hf_home)
 
-    # # Run per-turn progress scoring for THIS experiment folder
-    # run_progress(cfg)
-
-    # # Then run cross-experiment similarity
-    # run_similarity_embedding(cfg)
-
-    # Run judge based similarity analysis
-    # run_similarity_judge(cfg)
-
-    # # Run ranking judge based on similarity analysis
-    # run_similarity_judge_ranking(cfg)
-
-    # # Run teacher answer-leakage analysis
-    # run_leakage(cfg)
-
-    run_question_type(cfg)
+    task = str(cfg.analysis.task)
+    if task not in ANALYSIS_TASKS:
+        raise ValueError(f"analysis.task must be one of {sorted(ANALYSIS_TASKS)}, got: {task!r}")
+    ANALYSIS_TASKS[task](cfg)
 
 
 if __name__ == "__main__":

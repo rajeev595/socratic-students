@@ -1,18 +1,23 @@
 """
-Generate RQ figures for k=1, k=5, k=10 (Pass@k vs Turns).
+Pass@k vs. turns for the three research questions (main result figures).
 
-Reproduces the plot_results_rqs() logic from analysis.ipynb as a standalone script
-so all three k-values can be generated without a Jupyter kernel.
+  RQ1  Unscaffolded vs. Scaffolded (with the static baseline)
+  RQ2  No-assessment vs. Pre-Assessment vs. Mid-Assessment
+  RQ3  No-training vs. Self-ODQS vs. Peer-ODQS
 
-Output: experiments/plots/results_figures_rqs/
-  {dataset}__T-{teacher}__S-{student}__k{k}__{rq}.pdf
-  for k in {1, 5, 10} and rq in {rq1, rq2, rq3}
+Reads   <experiments>/<experiment>/<teacher>/<student>/<dataset>/aggregate_results_0.json
+Writes  <experiments>/plots/results/{dataset}__T-{teacher}__S-{student}__k{k}__{rq}.pdf
+        for k in {1, 5, 10} and rq in {rq1, rq2, rq3}
+
+Usage:
+    python -m codes.plot_results [--experiments ./experiments] [--students qwen7 mistral7]
+    python -m codes.plot_results --tables      # print turn-wise Pass@5 mean(std) for every method
 """
 
 from __future__ import annotations
 
+import argparse
 import json
-import os
 from pathlib import Path
 from typing import Iterable, List, Optional, Tuple
 
@@ -20,7 +25,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-# ── Style (matches existing RQ figures from analysis.ipynb) ──────────────────
+# ── Style ─────────────────────────────────────────────────────────────────────
 
 plt.rcParams.update({
     "text.usetex": True,
@@ -36,53 +41,57 @@ plt.rcParams.update({
 LINE_COLORS = ["#2D9CDB", "#EB5757", "#F2C94C", "#27AE60", "#9B51E0", "#F2994A"]
 MARKERS     = ["o", "s", "^", "D", "P"]
 
-EXP_DIR  = Path("/playpen-ssd2/ambati/interact_plus/experiments")
 TEACHERS = ["qwen72"]
-STUDENTS = ["mistral7", "qwen7", "gemma9"]
+STUDENTS = ["qwen7", "mistral7"]
 DATASETS = ["gsm8k", "humaneval_opc"]
-TURNS    = [1, 3, 5, 7, 9, 11]
+TURNS    = [1, 3, 5, 7, 9, 11]      # message indices of paper turns 0..5 (see configs/config.yaml)
 K_VALUES = [1, 5, 10]
 
-# ── Method name / file resolution (mirrors the notebook) ─────────────────────
+# The assessment that works best per domain (RQ2); ODQS students are evaluated with it (RQ3).
+BEST_ASSESSMENT = {"gsm8k": "pre_assessment", "humaneval_opc": "mid_assessment"}
 
-def _resolve(method: str, student: str, dataset: str) -> Tuple[str, str]:
-    """Return (folder_name, results_filename) for a given method."""
-    results_file = "aggregate_results.json"
-    if "gemma" in student:
-        results_file = "aggregate_results_0.json"
 
-    if method in ("pre", "mid"):
-        return f"{method}_cot", "aggregate_results_0.json"
+# ── Experiment folder / results file resolution ──────────────────────────────
 
-    if method in ("selfguided", "peerguided"):
-        suffix = "pre_cot" if dataset == "gsm8k" else "mid_cot"
-        return f"{method}_zero_margin_{suffix}", "aggregate_results_0.json"
+def experiment_folder(method: str, dataset: str) -> str:
+    """Map a method to its experiment folder name."""
+    if method in ("self_odqs", "peer_odqs"):
+        return f"{method}_{BEST_ASSESSMENT[dataset]}"
+    if method == "no_training":
+        return BEST_ASSESSMENT[dataset]
+    return method
 
-    return method, results_file
+
+def find_results(exp_dir: Path, name: str = "aggregate_results") -> Optional[Path]:
+    """codes.run_interact writes <name>_0.json; codes.run_cross_eval writes <name>.json."""
+    for fname in (f"{name}_0.json", f"{name}.json"):
+        if (exp_dir / fname).exists():
+            return exp_dir / fname
+    return None
 
 
 # ── Label mapping ─────────────────────────────────────────────────────────────
 
 def _label(method: str, tag: str) -> str:
     labels = {
-        "unguided":   "unscaffolded",
-        "cot":        "scaffolded",
-        "selfguided": "self-ODQS",
-        "peerguided": "peer-ODQS",
-        "pre":        "pre-assessment",
-        "mid":        "mid-assessment",
+        "unscaffolded":   "unscaffolded",
+        "scaffolded":     "scaffolded",
+        "pre_assessment": "pre-assessment",
+        "mid_assessment": "mid-assessment",
+        "no_training":    "no-training",
+        "self_odqs":      "self-ODQS",
+        "peer_odqs":      "peer-ODQS",
     }
-    name = labels.get(method, method)
-    if tag == "rq2" and method == "cot":
-        name = "no-assessment"
-    if tag == "rq3" and method in ("pre", "mid"):
-        name = "no-training"
-    return name
+    if tag == "rq2" and method == "scaffolded":
+        return "no-assessment"
+    return labels.get(method, method)
 
 
 # ── Core plotting function ────────────────────────────────────────────────────
 
 def plot_rq(
+    exp_root: Path,
+    out_dir: Path,
     methods: List[str],
     teachers: List[str],
     students: List[str],
@@ -91,8 +100,7 @@ def plot_rq(
     tag: str,
     y_limits: Optional[Tuple[float, float]] = (0.0, 1.0),
 ) -> None:
-    plot_dir = EXP_DIR / "plots" / "results_figures_rqs"
-    plot_dir.mkdir(parents=True, exist_ok=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
     turns = sorted(TURNS)
 
     for teacher in teachers:
@@ -103,9 +111,9 @@ def plot_rq(
                     plotted = []
 
                     for i, method in enumerate(methods):
-                        folder, fname = _resolve(method, student, dataset)
-                        fpath = EXP_DIR / folder / teacher / student / dataset / fname
-                        if not fpath.exists():
+                        folder = experiment_folder(method, dataset)
+                        fpath = find_results(exp_root / folder / teacher / student / dataset)
+                        if fpath is None:
                             continue
                         try:
                             data  = json.loads(fpath.read_text())
@@ -124,7 +132,8 @@ def plot_rq(
                         ax.errorbar(range(len(turns)), means, yerr=stds,
                                     fmt="none", ecolor=color, elinewidth=1.1, capsize=3)
 
-                        if method == "unguided":
+                        # Static baseline = unscaffolded student before any interaction (turn 0)
+                        if method == "unscaffolded":
                             ax.axhline(means[0], linestyle="--", linewidth=1.5,
                                        color=color, alpha=0.8, label="static")
 
@@ -144,24 +153,62 @@ def plot_rq(
                     ax.margins(x=0.02)
                     fig.tight_layout()
 
-                    out = plot_dir / f"{dataset}__T-{teacher}__S-{student}__k{k}__{tag}.pdf"
+                    out = out_dir / f"{dataset}__T-{teacher}__S-{student}__k{k}__{tag}.pdf"
                     fig.savefig(out, dpi=600, bbox_inches="tight")
                     plt.close(fig)
                     print(f"Saved: {out}")
 
 
+# ── Result tables ─────────────────────────────────────────────────────────────
+
+TABLE_METHODS = ["unscaffolded", "scaffolded", "rejection_sampling", "rejection_sampling_dpo",
+                 "pre_assessment", "mid_assessment", "self_odqs", "peer_odqs"]
+
+
+def print_tables(exp_root: Path, teachers: List[str], students: List[str], datasets: List[str], k: int = 5) -> None:
+    """Turn-wise Pass@k as mean(std) for every method, one table per (student, dataset)."""
+    for teacher in teachers:
+        for dataset in datasets:
+            for student in students:
+                print(f"\n{dataset} | teacher={teacher} | student={student} | Pass@{k} mean(std) per turn")
+                for method in TABLE_METHODS:
+                    fpath = find_results(exp_root / experiment_folder(method, dataset) / teacher / student / dataset)
+                    if fpath is None:
+                        continue
+                    data = json.loads(fpath.read_text())
+                    cells = [f"{data[str(t)][str(k)][0]:.3f}({data[str(t)][str(k)][1]:.3f})" for t in TURNS]
+                    print(f"  {method:24s}" + "  ".join(cells))
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
-    # RQ1: does interaction help? (unscaffolded vs scaffolded)
-    plot_rq(["cot", "unguided"], TEACHERS, STUDENTS, DATASETS, K_VALUES, "rq1")
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--experiments", default="./experiments", help="experiments root (paths.experiments)")
+    parser.add_argument("--out", default=None, help="output dir (default: <experiments>/plots/results)")
+    parser.add_argument("--teachers", nargs="+", default=TEACHERS)
+    parser.add_argument("--students", nargs="+", default=STUDENTS)
+    parser.add_argument("--datasets", nargs="+", default=DATASETS)
+    parser.add_argument("--k", nargs="+", type=int, default=K_VALUES)
+    parser.add_argument("--tables", action="store_true", help="print turn-wise Pass@5 tables instead of plotting")
+    args = parser.parse_args()
 
-    # RQ2: does assessment help? (no-assessment vs pre vs mid)
-    plot_rq(["cot", "pre", "mid"], TEACHERS, STUDENTS, DATASETS, K_VALUES, "rq2")
+    exp_root = Path(args.experiments)
+    if args.tables:
+        print_tables(exp_root, args.teachers, args.students, args.datasets)
+        return
+    out_dir = Path(args.out) if args.out else exp_root / "plots" / "results"
+    common = (exp_root, out_dir)
+    sel = (args.teachers, args.students, args.datasets, args.k)
+
+    # RQ1: does interaction help? (scaffolded vs unscaffolded vs static)
+    plot_rq(*common, ["scaffolded", "unscaffolded"], *sel, "rq1")
+
+    # RQ2: do assessments help? (no-assessment vs pre vs mid)
+    plot_rq(*common, ["scaffolded", "pre_assessment", "mid_assessment"], *sel, "rq2")
 
     # RQ3: does ODQS training help? (no-training vs self vs peer)
-    plot_rq(["pre",  "selfguided", "peerguided"], TEACHERS, STUDENTS, ["gsm8k"],         K_VALUES, "rq3")
-    plot_rq(["mid",  "selfguided", "peerguided"], TEACHERS, STUDENTS, ["humaneval_opc"], K_VALUES, "rq3")
+    plot_rq(*common, ["no_training", "self_odqs", "peer_odqs"], *sel, "rq3")
 
 
 if __name__ == "__main__":

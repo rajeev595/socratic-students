@@ -13,11 +13,23 @@ from datasets import load_dataset
 from transformers import AutoTokenizer, AutoModelForCausalLM, GenerationConfig
 from transformers.trainer_utils import get_last_checkpoint
 
-from codes.utils.vars import set_envs
+from codes.utils.vars import set_envs, hf_cache_dir
 from codes.utils.llm.server import _MODEL_ALIASES
 
 
 logger = logging.getLogger(__name__)
+
+
+def _data_file(cfg: DictConfig, root: str, kind: str, i: int, split: str) -> str:
+    """
+    Path of one training-data file (kind = sft | dpo | grpo).
+    Peer-ODQS files (data.source=peer) carry the peer model in their name.
+    """
+    source = str(cfg.data.source)
+    if source not in ("self", "peer"):
+        raise ValueError(f"data.source must be 'self' or 'peer', got: {source!r}")
+    stem = f"{cfg.student.model}__{cfg.peer.model}__" if source == "peer" else f"{cfg.student.model}_"
+    return os.path.join(root, f"{stem}{kind}_iter{i}_{split}.jsonl")
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(name)s: %(message)s",
@@ -26,7 +38,7 @@ logging.basicConfig(
 # -----------------------------
 # Preprocess helpers
 # -----------------------------
-def preprocess_rlhf_example(
+def preprocess_dpo_example(
     example,
     tokenizer: AutoTokenizer
 ):
@@ -103,7 +115,7 @@ def setup_for_training_8bit(
         quantization_config=bnb,
         device_map=({"": local_rank} if use_8bit else None),
         low_cpu_mem_usage=False,
-        cache_dir=os.path.join(os.environ["HF_HOME"], "hub")
+        cache_dir=hf_cache_dir()
     )
 
     try:
@@ -202,7 +214,7 @@ def setup_for_training_4bit(
         quantization_config=bnb,
         device_map=({"": local_rank} if use_4bit else None),
         low_cpu_mem_usage=False,
-        cache_dir=os.path.join(os.environ["HF_HOME"], "hub"),
+        cache_dir=hf_cache_dir(),
         torch_dtype=torch.bfloat16 if use_4bit else None,
     )
 
@@ -380,7 +392,7 @@ def train_dpo(
     tokenizer: AutoTokenizer,
     train_fpath: str,
     val_fpath: str,
-    init_adapter_dir: Optional[str],   # pass your SFT adapter dir here to start from SFT
+    init_adapter_dir: Optional[str],   # SFT adapter dir to start from (None = start from the base model)
     out_dir: str,
     use_kbit: bool,
     lora_r: int,
@@ -416,7 +428,7 @@ def train_dpo(
             model, 
             init_adapter_dir, 
             is_trainable=True, 
-            cache_dir=os.path.join(os.environ["HF_HOME"], "hub")
+            cache_dir=hf_cache_dir()
         )
         peft_cfg = None  # do NOT pass peft_config to trainer; model is already wrapped
 
@@ -424,9 +436,9 @@ def train_dpo(
 
     # ---- Data ----
     ds = load_dataset("json", data_files=train_fpath)["train"]
-    train_ds = ds.map(lambda x: preprocess_rlhf_example(x, tokenizer=tokenizer))
+    train_ds = ds.map(lambda x: preprocess_dpo_example(x, tokenizer=tokenizer))
     ds = load_dataset("json", data_files=val_fpath)["train"]
-    val_ds = ds.map(lambda x: preprocess_rlhf_example(x, tokenizer=tokenizer))
+    val_ds = ds.map(lambda x: preprocess_dpo_example(x, tokenizer=tokenizer))
 
     # ---- DPO config ----
     dpo_cfg = DPOConfig(
@@ -521,7 +533,7 @@ def main(cfg: DictConfig) -> None:
     tokenizer = AutoTokenizer.from_pretrained(
         student_name, 
         use_fast=True, 
-        cache_dir=os.path.join(os.environ["HF_HOME"], "hub")
+        cache_dir=hf_cache_dir()
     )
     if tokenizer.pad_token is None and tokenizer.eos_token is not None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -544,21 +556,16 @@ def main(cfg: DictConfig) -> None:
     ckpt_dir_sft = None
     if cfg.train.sft_epochs > 0:
         train_fpath_sft, val_fpath_sft = [], []
-        for i in range(cfg.gen.dagger_iter + 1):
-            if "self" in cfg.experiment.name or "judge" in cfg.experiment.name:
-                train_fpath = os.path.join(root, f"{cfg.student.model}_sft_iter{i}_train.jsonl")
-                val_fpath = os.path.join(root, f"{cfg.student.model}_sft_iter{i}_val.jsonl")
-
-            if "peer" in cfg.experiment.name:
-                train_fpath = os.path.join(root, f"{cfg.student.model}__{cfg.guide.model}__sft_iter{i}_train.jsonl")
-                val_fpath = os.path.join(root, f"{cfg.student.model}__{cfg.guide.model}__sft_iter{i}_val.jsonl")
+        for i in range(cfg.gen.iteration + 1):
+            train_fpath = _data_file(cfg, root, "sft", i, "train")
+            val_fpath = _data_file(cfg, root, "sft", i, "val")
             
             train_fpath_sft.append(train_fpath)
             val_fpath_sft.append(val_fpath)
 
         ckpt_dir_sft = os.path.join(
             base_ckpt, 
-            f"sft_{cfg.gen.dagger_iter}"
+            f"sft_{cfg.gen.iteration}"
         )
         os.makedirs(ckpt_dir_sft, exist_ok=True)
         train_sft(
@@ -582,28 +589,19 @@ def main(cfg: DictConfig) -> None:
     # DPO
     if cfg.train.dpo_epochs > 0:
         train_fpath_dpo, val_fpath_dpo = [], []
-        for i in range(cfg.gen.dagger_iter + 1):
-            if "self" in cfg.experiment.name or "judge" in cfg.experiment.name:
-                train_fpath = os.path.join(root, f"{cfg.student.model}_dpo_iter{i}_train.jsonl")
-                val_fpath = os.path.join(root, f"{cfg.student.model}_dpo_iter{i}_val.jsonl")
-
-            if "peer" in cfg.experiment.name:
-                train_fpath = os.path.join(root, f"{cfg.student.model}__{cfg.guide.model}__dpo_iter{i}_train.jsonl")
-                val_fpath = os.path.join(root, f"{cfg.student.model}__{cfg.guide.model}__dpo_iter{i}_val.jsonl")
+        for i in range(cfg.gen.iteration + 1):
+            train_fpath = _data_file(cfg, root, "dpo", i, "train")
+            val_fpath = _data_file(cfg, root, "dpo", i, "val")
 
             train_fpath_dpo.append(train_fpath)
             val_fpath_dpo.append(val_fpath)
 
         ckpt_dir_dpo = os.path.join(
             base_ckpt,
-            f"dpo_{cfg.gen.dagger_iter}"
+            f"dpo_{cfg.gen.iteration}"
         )
         os.makedirs(ckpt_dir_dpo, exist_ok=True)
 
-        # # DPO (start from SFT adapter)
-        # setup_for_training = setup_for_training_4bit
-        # if "selfguided" in cfg.experiment.name and cfg.data.type == "math":
-        #     setup_for_training = setup_for_training_8bit
 
         train_dpo(
             tokenizer,
@@ -611,7 +609,7 @@ def main(cfg: DictConfig) -> None:
             val_fpath=val_fpath_dpo,
             init_adapter_dir=get_best_ckpt_dir(ckpt_dir_sft),
             out_dir=ckpt_dir_dpo,
-            use_kbit=cfg.train.rlhf_use_8bit,
+            use_kbit=cfg.train.dpo_use_8bit,
             lora_r=cfg.train.lora_r,
             lora_alpha=cfg.train.lora_alpha,
             lora_dropout=cfg.train.lora_dropout,

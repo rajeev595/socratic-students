@@ -1,3 +1,15 @@
+"""
+EXPERIMENTAL -- not used in the paper and not maintained.
+
+Variant of codes.data.collect_self_odqs that scores a candidate question by a short look-ahead
+rollout (gen.rollout_horizon further turns, discounted by gen.rollout_gamma) instead of by the
+Pass@k right after the teacher's reply.
+
+Usage:
+    python -m codes.experimental.collect_self_odqs_rollout student.model=qwen7 data.type=math \
+        experiment.dataset=gsm8k data.name=odqs_rollout data.split=train experiment.name=self_odqs_rollout
+"""
+
 import os
 import time
 import json
@@ -89,10 +101,10 @@ def rollout_max_reward(
     k_values: List[int],
     pass_k: int,
     num_samples: int,
-    rlhf_samples: int,
+    num_candidates: int,
     horizon: int,
     eps: float,
-    use_cot: bool,
+    use_scaffold: bool,
     is_ood: bool,
     gamma: float,
 ) -> Tuple[float, List[float], Dict[str, Any], Tuple[int, int, int, int]]:
@@ -102,7 +114,7 @@ def rollout_max_reward(
       ctx_0 = texts + [Q, A_1]
       eval_0 = pass@k(ctx_0)    # from cur_scores_s0
       then for s = 1..horizon-1:
-        - propose rlhf_samples follow-up questions
+        - propose num_candidates follow-up questions
         - teacher answers each
         - evaluate each (pass@k)
         - pick one (eps-greedy on pass@k) and append
@@ -156,8 +168,8 @@ def rollout_max_reward(
 
         # Student proposes follow-up questions
         student_replies, p_tks, c_tks = interact(
-            True, ctx, evaluation_problem, rlhf_samples, data_type,
-            student_client, student_name, student_temperature, use_cot
+            True, ctx, evaluation_problem, num_candidates, data_type,
+            student_client, student_name, student_temperature, use_scaffold
         )
         total_student_prompt_tks += p_tks
         total_student_completion_tks += c_tks
@@ -170,7 +182,7 @@ def rollout_max_reward(
         for sr in student_replies:
             tr, p_tks, c_tks = interact(
                 False, ctx + [sr], evaluation_problem, 1, data_type,
-                teacher_client, teacher_name, teacher_temperature, use_cot
+                teacher_client, teacher_name, teacher_temperature, use_scaffold
             )
             teacher_replies.append(tr[0])
             total_teacher_prompt_tks += p_tks
@@ -242,12 +254,12 @@ def run_problem(
     k_values: List[int],
     pass_k: int,
     num_samples: int,
-    rlhf_samples: int,
+    num_candidates: int,
     assessment_turn: int,
     start_from_turn: int = 1,
     total_turns: int = 10,
     eps: float = 0.2,
-    use_cot: bool = False,
+    use_scaffold: bool = False,
     is_ood: bool = False,
     # OLD knobs (kept for compatibility)
     use_delta_reward: bool = False,
@@ -324,12 +336,12 @@ def run_problem(
             True,
             texts,
             interaction_problem,
-            rlhf_samples,
+            num_candidates,
             data_type,
             student_client,
             student_name,
             student_temperature,
-            use_cot
+            use_scaffold
         )
         total_student_prompt_tks += p_tks
         total_student_completion_tks += c_tks
@@ -349,7 +361,7 @@ def run_problem(
                 teacher_client,
                 teacher_name,
                 teacher_temperature,
-                use_cot
+                use_scaffold
             )
             teacher_replies.append(teacher_reply[0])
             total_teacher_prompt_tks += p_tks
@@ -405,7 +417,7 @@ def run_problem(
             total_student_completion_tks += c_tks
 
         # ---- Prompt messages used to elicit candidate questions
-        sys_prompt = _select_sys_prompt(data_type, use_cot, True, evaluation_problem)
+        sys_prompt = _select_sys_prompt(data_type, use_scaffold, True, evaluation_problem)
         prompt_messages = [{"role": "system", "content": sys_prompt}] + format_messages(
             texts, starting_with_user=True
         )
@@ -417,7 +429,7 @@ def run_problem(
             "turn": turn,
             "prompt_messages": prompt_messages,
             "prompt_type": "messages",
-            "k": rlhf_samples,
+            "k": num_candidates,
             "pass_k_key": pass_k,  # int
             "candidates": [],
         }
@@ -457,10 +469,10 @@ def run_problem(
                 k_values=k_values,
                 pass_k=pass_k,
                 num_samples=num_samples,
-                rlhf_samples=rlhf_samples,
+                num_candidates=num_candidates,
                 horizon=rollout_horizon,
                 eps=eps,
-                use_cot=use_cot,
+                use_scaffold=use_scaffold,
                 is_ood=is_ood,
                 gamma=rollout_gamma,
             )
@@ -505,12 +517,12 @@ def run_problem(
             texts += [student_replies[best_idx], teacher_replies[best_idx]]
             propensity = 1 - eps
         else:
-            non_best = [i for i in range(rlhf_samples) if i != best_idx]
+            non_best = [i for i in range(num_candidates) if i != best_idx]
             idx = random.choice(non_best) if non_best else best_idx
             texts += [student_replies[idx], teacher_replies[idx]]
             appended_idx = idx
             # probability mass spread over (K-1) non-best choices
-            propensity = eps / max(1, rlhf_samples)
+            propensity = eps / max(1, num_candidates)
 
         # ---- SFT collection gated by rollout reward (same structure as before)
         if best_reward >= sft_gate_min:
@@ -622,47 +634,47 @@ def main(cfg: DictConfig) -> None:
 
     fpath_sft = os.path.join(
         base_dir, name,
-        f"{cfg.student.model}_cot_sft_iter{cfg.gen.dagger_iter}_{cfg.data.split}.jsonl" if cfg.experiment.cot else f"{cfg.student.model}_sft_iter{cfg.gen.dagger_iter}_{cfg.data.split}.jsonl"
+        f"{cfg.student.model}_scaffolded_sft_iter{cfg.gen.iteration}_{cfg.data.split}.jsonl" if cfg.experiment.scaffolded else f"{cfg.student.model}_sft_iter{cfg.gen.iteration}_{cfg.data.split}.jsonl"
     )
     fpath_dpo = os.path.join(
         base_dir, name,
-        f"{cfg.student.model}_cot_dpo_iter{cfg.gen.dagger_iter}_{cfg.data.split}.jsonl" if cfg.experiment.cot else f"{cfg.student.model}_dpo_iter{cfg.gen.dagger_iter}_{cfg.data.split}.jsonl"
+        f"{cfg.student.model}_scaffolded_dpo_iter{cfg.gen.iteration}_{cfg.data.split}.jsonl" if cfg.experiment.scaffolded else f"{cfg.student.model}_dpo_iter{cfg.gen.iteration}_{cfg.data.split}.jsonl"
     )
     fpath_grpo = os.path.join(
         base_dir, name,
-        f"{cfg.student.model}_cot_grpo_iter{cfg.gen.dagger_iter}_{cfg.data.split}.jsonl" if cfg.experiment.cot else f"{cfg.student.model}_grpo_iter{cfg.gen.dagger_iter}_{cfg.data.split}.jsonl"
+        f"{cfg.student.model}_scaffolded_grpo_iter{cfg.gen.iteration}_{cfg.data.split}.jsonl" if cfg.experiment.scaffolded else f"{cfg.student.model}_grpo_iter{cfg.gen.iteration}_{cfg.data.split}.jsonl"
     )
 
     existing_pids = set()
     count_dpo, count_sft, count_grpo = 0, 0, 0
 
-    # Resume dedupe by dagger_iter for SFT/DPO/GRPO
+    # Resume dedupe by iteration for SFT/DPO/GRPO
     if os.path.exists(fpath_sft):
         with open(fpath_sft, "r") as f:
             for line in f:
                 ex = json.loads(line)
                 count_sft += 1
-                if ex.get("dagger_iter") == cfg.gen.dagger_iter:
+                if ex.get("iteration") == cfg.gen.iteration:
                     existing_pids.add(ex["problem"]["id"])
-        logger.info(f"Loaded {count_sft} existing SFT-{cfg.gen.dagger_iter} examples from {fpath_sft}")
+        logger.info(f"Loaded {count_sft} existing SFT-{cfg.gen.iteration} examples from {fpath_sft}")
 
     if os.path.exists(fpath_dpo):
         with open(fpath_dpo, "r") as f:
             for line in f:
                 ex = json.loads(line)
                 count_dpo += 1
-                if ex.get("dagger_iter") == cfg.gen.dagger_iter:
+                if ex.get("iteration") == cfg.gen.iteration:
                     existing_pids.add(ex["problem"]["id"])
-        logger.info(f"Loaded {count_dpo} existing DPO-{cfg.gen.dagger_iter} examples from {fpath_dpo}")
+        logger.info(f"Loaded {count_dpo} existing DPO-{cfg.gen.iteration} examples from {fpath_dpo}")
 
     if os.path.exists(fpath_grpo):
         with open(fpath_grpo, "r") as f:
             for line in f:
                 ex = json.loads(line)
                 count_grpo += 1
-                if ex.get("dagger_iter") == cfg.gen.dagger_iter:
+                if ex.get("iteration") == cfg.gen.iteration:
                     existing_pids.add(ex["problem"]["id"])
-        logger.info(f"Loaded {count_grpo} existing GRPO-{cfg.gen.dagger_iter} examples from {fpath_grpo}")
+        logger.info(f"Loaded {count_grpo} existing GRPO-{cfg.gen.iteration} examples from {fpath_grpo}")
 
     # Problems
     problems_fpath = os.path.join(
@@ -749,12 +761,12 @@ def main(cfg: DictConfig) -> None:
                     cfg.gen.k_values,
                     cfg.gen.pass_k,
                     cfg.gen.num_samples,
-                    cfg.gen.rlhf_samples,
+                    cfg.gen.num_candidates,
                     cfg.experiment.assessment_turn,
                     cfg.experiment.start_from_turn,
                     cfg.experiment.total_turns,
                     cfg.gen.eps,
-                    cfg.experiment.cot,
+                    cfg.experiment.scaffolded,
                     cfg.experiment.ood,
                     use_delta_reward,
                     dpo_margin_min,
@@ -778,19 +790,19 @@ def main(cfg: DictConfig) -> None:
 
                 # Save DPO
                 for ex in pairs:
-                    ex["dagger_iter"] = cfg.gen.dagger_iter
+                    ex["iteration"] = cfg.gen.iteration
                     f_dpo.write(json.dumps(ex, ensure_ascii=False) + "\n")
                 count_dpo += len(pairs)
 
                 # Save SFT
                 for ex in chosen:
-                    ex["dagger_iter"] = cfg.gen.dagger_iter
+                    ex["iteration"] = cfg.gen.iteration
                     f_sft.write(json.dumps(ex, ensure_ascii=False) + "\n")
                 count_sft += len(chosen)
 
                 # Save GRPO
                 for group in grpo_groups:
-                    group["dagger_iter"] = cfg.gen.dagger_iter
+                    group["iteration"] = cfg.gen.iteration
                     f_grpo.write(json.dumps(group, ensure_ascii=False) + "\n")
                 count_grpo += len(grpo_groups)
 

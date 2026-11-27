@@ -1,5 +1,5 @@
 """
-Analyze human preference annotation results from AMT/Prolific.
+Analyze human preference annotation results from Amazon Mechanical Turk.
 
 For each item, 3 workers judged which of two student questions (A or B) requires
 more mathematical explanation from the tutor.  label_a / label_b record which

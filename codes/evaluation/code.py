@@ -4,7 +4,7 @@ Code evaluation utilities.
 This module provides:
 - A prompt template and a generator to obtain multiple code completions
   from an OpenAI-compatible client, with post-processing that mirrors
-  your original evaluation logic (strip <think>, pick last fenced block,
+  the evaluation logic (strip <think>, pick last fenced block,
   remove leading docstring, and trim a duplicate `def {entry_point}...`
   header if the prompt already shows the signature).
 - An executor that evaluates a completion against the provided tests by
@@ -174,7 +174,7 @@ def evaluate_code_completion(
     full_code = (problem["solution"] if sanity_check else prompt + code_block) + "\n\n" + problem["test"]
 
     # Create temp file
-    tmp_dir = os.path.join(os.environ["HF_HOME"], "tmp")
+    tmp_dir = os.path.join(tempfile.gettempdir(), "socratic_students_exec")
     os.makedirs(tmp_dir, exist_ok=True)
     f = tempfile.NamedTemporaryFile(
         suffix=".py", mode="w", delete=False, 

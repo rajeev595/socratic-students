@@ -19,7 +19,7 @@ logging.basicConfig(
 )
 
 
-# Known local nicknames → (HF-style model id, port)
+# Nicknames -> Hugging Face model ids. Any other string is passed to the server as-is (HF id or local path).
 _MODEL_ALIASES: Dict[str, str] = {
     # local instruct models
     "llama8": "meta-llama/Llama-3.1-8B-Instruct",
@@ -414,7 +414,6 @@ def build_client(
         except Exception:
             pass
 
-    # give yourself a one-liner switch
     client.close = _close
     client.shutdown = _close
     try:

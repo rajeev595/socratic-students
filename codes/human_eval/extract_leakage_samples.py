@@ -1,22 +1,19 @@
 """
 Extract teacher-response samples for human leakage evaluation.
 
-Covers all four (student, task) combinations matching Table 10 of the paper.
-Each task has five conditions (assessment type differs between tasks):
+Covers all four (student, task) combinations of the teacher-leakage table in the paper.
+Each task has five conditions (the assessment type differs between tasks):
 
-  Math (5 conditions):
-    unguided   → UNSCAFFOLDED          experiments/unguided/…/transcripts
-    cot        → SCAFFOLDED            experiments/cot/…/transcripts
-    pre_cot    → +PRE-ASSESSMENT       experiments/pre_cot/…/transcripts_0
-    self_odqs  → +self-ODQS            experiments/selfguided_zero_margin_pre_cot/…/transcripts_0
-    peer_odqs  → +peer-ODQS            experiments/peerguided_zero_margin_pre_cot/…/transcripts_0
+  condition        paper name         experiment folder (under experiments/)
+  ---------------  -----------------  ------------------------------------------
+  unscaffolded     UNSCAFFOLDED       unscaffolded
+  scaffolded       SCAFFOLDED         scaffolded
+  pre_assessment   +PRE-ASSESSMENT    pre_assessment              (math only)
+  mid_assessment   +MID-ASSESSMENT    mid_assessment              (coding only)
+  self_odqs        +self-ODQS         self_odqs_{pre,mid}_assessment
+  peer_odqs        +peer-ODQS         peer_odqs_{pre,mid}_assessment
 
-  Coding (5 conditions):
-    unguided   → UNSCAFFOLDED          experiments/unguided/…/transcripts
-    cot        → SCAFFOLDED            experiments/cot/…/transcripts
-    mid_cot    → +MID-ASSESSMENT       experiments/mid_cot/…/transcripts_0
-    self_odqs  → +self-ODQS            experiments/selfguided_zero_margin_mid_cot/…/transcripts_0
-    peer_odqs  → +peer-ODQS            experiments/peerguided_zero_margin_mid_cot/…/transcripts_0
+Transcripts are read from <experiment folder>/qwen72/<student>/<dataset>/transcripts_0.
 
 Output (one CSV/JSONL pair per (student, task) combination):
   leakage_samples_{student}_{task}.jsonl / .csv   — task items + gold QC items
@@ -78,25 +75,25 @@ BASE = Path(__file__).resolve().parents[2]  # repo root
 # Condition maps: (exp_dir_name, transcript_subdir)
 # ---------------------------------------------------------------------------
 _MATH_CONDITIONS = {
-    "unguided":   ("unguided",                         "transcripts"),
-    "cot":        ("cot",                              "transcripts"),
-    "pre_cot":    ("pre_cot",                          "transcripts_0"),
-    "self_odqs":  ("selfguided_zero_margin_pre_cot",   "transcripts_0"),
-    "peer_odqs":  ("peerguided_zero_margin_pre_cot",   "transcripts_0"),
+    "unscaffolded":   ("unscaffolded",                         "transcripts_0"),
+    "scaffolded":        ("scaffolded",                              "transcripts_0"),
+    "pre_assessment":    ("pre_assessment",                          "transcripts_0"),
+    "self_odqs":  ("self_odqs_pre_assessment",   "transcripts_0"),
+    "peer_odqs":  ("peer_odqs_pre_assessment",   "transcripts_0"),
 }
 _CODING_CONDITIONS = {
-    "unguided":   ("unguided",                         "transcripts"),
-    "cot":        ("cot",                              "transcripts"),
-    "mid_cot":    ("mid_cot",                          "transcripts_0"),
-    "self_odqs":  ("selfguided_zero_margin_mid_cot",   "transcripts_0"),
-    "peer_odqs":  ("peerguided_zero_margin_mid_cot",   "transcripts_0"),
+    "unscaffolded":   ("unscaffolded",                         "transcripts_0"),
+    "scaffolded":        ("scaffolded",                              "transcripts_0"),
+    "mid_assessment":    ("mid_assessment",                          "transcripts_0"),
+    "self_odqs":  ("self_odqs_mid_assessment",   "transcripts_0"),
+    "peer_odqs":  ("peer_odqs_mid_assessment",   "transcripts_0"),
 }
 
 CONDITION_LABELS = {
-    "unguided":  "UNSCAFFOLDED",
-    "cot":       "SCAFFOLDED",
-    "pre_cot":   "+PRE-ASSESSMENT",
-    "mid_cot":   "+MID-ASSESSMENT",
+    "unscaffolded":  "UNSCAFFOLDED",
+    "scaffolded":       "SCAFFOLDED",
+    "pre_assessment":   "+PRE-ASSESSMENT",
+    "mid_assessment":   "+MID-ASSESSMENT",
     "self_odqs": "+self-ODQS",
     "peer_odqs": "+peer-ODQS",
 }
@@ -110,7 +107,7 @@ STUDENT_TASK_MATRIX = [
     ),
     (
         "mistral7", "coding", "humaneval_opc",
-        BASE / "data/qwen72/humaneval_opc/splits_0.3/mistral7_test.json",
+        BASE / "data/qwen72/humaneval_opc/splits_0.5/mistral7_test.json",
         "qwen72", _CODING_CONDITIONS,
     ),
     (
@@ -120,7 +117,7 @@ STUDENT_TASK_MATRIX = [
     ),
     (
         "qwen7", "coding", "humaneval_opc",
-        BASE / "data/qwen72/humaneval_opc/splits_0.3/qwen7_test.json",
+        BASE / "data/qwen72/humaneval_opc/splits_0.5/qwen7_test.json",
         "qwen72", _CODING_CONDITIONS,
     ),
 ]
@@ -377,7 +374,7 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--out_dir", type=str, default="experiments/human_eval/data")
     parser.add_argument("--conditions", type=str, default=None,
-                        help="Comma-separated conditions to include, e.g. self_odqs,unguided "
+                        help="Comma-separated conditions to include, e.g. self_odqs,unscaffolded "
                              "(default: all conditions for each task)")
     parser.add_argument("--students", type=str, default=None,
                         help="Comma-separated students to include, e.g. mistral7,qwen7 "

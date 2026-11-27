@@ -1,109 +1,49 @@
-paths:
-  openai_api_key_fpath: /home/ambati/.openai_api_key.zshrc        # path to OpenAI API key
-  data: /playpen-ssd2/ambati/interact_plus/data/                # path to data
-  experiments: /playpen-ssd2/ambati/interact_plus/experiments/  # path to save experiment results
-  hf_home: /playpen-ssd2/ambati/hf_home/                        # Hugging Face cache dir
+# Socratic Students -- default configuration (Hydra).
+# Every key can be overridden on the command line, e.g.
+#   python -m codes.run_interact student.model=mistral7 experiment.name=scaffolded experiment.scaffolded=True
+#
+# Model names are either a nickname from codes/utils/llm/server.py (_MODEL_ALIASES)
+# or a full Hugging Face model id.
 
-# Model
-teacher:
-  model: qwen72
+paths:
+  data: ./data                    # curated problem sets and ODQS training data
+  experiments: ./experiments      # transcripts, results, checkpoints, logs
+  hf_home:                        # Hugging Face cache dir; empty = keep the HF_HOME already in your environment
+  openai_api_key_fpath:           # optional text file with an OpenAI key; only needed for OpenAI-hosted models
+
+# ---------------------------------------------------------------------------
+# Models. Each role is served by its own local vLLM (or SGLang) server that the
+# scripts start and stop automatically on the listed GPUs.
+# ---------------------------------------------------------------------------
+teacher:                          # T in the paper
+  model: qwen72                   # Qwen2.5-72B-Instruct
   temperature: 0.8
-  server: "vllm"    # sglang/vllm/hf
+  server: "vllm"                  # vllm | sglang
   gpus: [0,1,2,3]
 
-student:
-  model: qwen7
-  lora:
-    name:
-    path:
-  temperature: 0.8
-  server: "vllm"    # sglang/vllm/hf
+student:                          # S in the paper
+  model: qwen7                    # qwen7 (Qwen2.5-7B-Instruct) | mistral7 (Mistral-7B-Instruct-v0.3)
+  lora:                           # set both to evaluate an ODQS-trained student
+    name:                         # any label, e.g. qwen7_odqs
+    path:                         # path to the LoRA checkpoint directory
+  temperature: 0.8                # temperature for asking questions (answers are always sampled at 0.3)
+  server: "vllm"
   gpus: [4,5,6,7]
 
-guide:
-  model: qwen30
+peer:                             # candidate source for Peer-ODQS
+  model: qwen30                   # Qwen3-30B-A3B-Instruct-2507
   temperature: 0.8
-  server: "vllm"    # sglang/vllm/hf
+  server: "vllm"
   gpus: [6,7]
 
-judge:
-  model: llama70
+judge:                            # LLM judge for the analyses and for Rejection Sampling
+  model: llama70                  # llama70 (leakage, question types) | qwen72 (progress, similarity, rejection sampling)
   temperature: 0.8
-  server: "vllm"    # sglang/vllm/hf
+  server: "vllm"
   gpus: [4,5,6,7]
 
-# Data & paths
-data:
-  type: math        # code or math
-  data_amount: 2000
-  split: test
-  name: "rlhf_margin_zero"      # hard / rlhf / judge
-
-# Generation / evaluation
-gen:
-  k_values: [1, 5, 10]
-  num_samples: 25
-  rlhf_samples: 5
-  pass_k: 5
-  pass_at_k_threshold: 0.5
-  eps: 0.2                      # epsilon-greedy exploration
-  retry_on_fail: 5
-  take_every: 1                 # only used for math dataset
-  dagger_iter: 0                # DAgger iteration
-  use_delta_reward: true        # counterfactual reward = current - baseline
-  dpo_margin_min: 0.0005        # include near-ties (>= 0.01)
-  dpo_margin_max: 1.0           # cap too-easy negatives (<= 0.50)
-  dpo_max_pairs_per_turn:       # optional per-turn cap; remove or set null to disable
-
-  rollout_horizon: 3            # or 2/3 etc.
-  rollout_gamma: 0.9            # < 1.0 to prefer earlier success
-  sft_gate_min: 0.85
-
-
-# Direct Preference Optimization (DPO) settings
-train:
-  train_size: 0.5
-  val_size: 0.2
-  sft_use_8bit: True
-  rlhf_use_8bit: True
-  lora_r: 16
-  lora_alpha: 32
-  lora_dropout: 0.05
-  lora_target_modules: ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]  
-  sft_batch_size: 1
-  dpo_batch_size: 1
-  grpo_batch_size_groups: 1
-  grad_accum: 8
-  sft_lr: 1e-4
-  dpo_lr: 1e-5
-  grpo_lr: 5e-6  
-  beta: 0.2
-  sft_epochs: 0
-  dpo_epochs: 5
-  grpo_epochs: 5
-  dpo_eval_steps: 25
-  sft_eval_steps: 25
-  grpo_tau: 0.7
-  grpo_reward_norm: "zscore"
-  grpo_kl_coeff: 0.0
-  gpus: [0,1,2,3,4,5,6,7]
-
-# Experiment settings
-experiment:
-  name: data_collection
-  cot: False
-  ood: False
-  dataset: gsm8k        # code - humaneval_opc/mbpp, math - gsm8k
-  assessment_turn: -1   # -1 (none), 1 (pre), 5 (mid)
-  start_from_turn: 1    # 1 (new), odd (student), even (teacher)
-  total_turns: 11
-  num_workers: 128
-  chunk_size: 256
-
-plot:
-
-evaluator:
-  model: mistral7                   # model used for Pass@k evaluation step
+evaluator:                        # solver used by codes.run_cross_eval (generator-vs-solver ablation)
+  model: qwen7
   temperature: 0.3
   server: "vllm"
   gpus: [4,5,6,7]
@@ -111,11 +51,106 @@ evaluator:
     name:
     path:
 
+# ---------------------------------------------------------------------------
+# Data
+# ---------------------------------------------------------------------------
+data:
+  type: math                      # math | code
+  data_amount: 2000               # max number of problems to use
+  split: test                     # train | val | test
+  name: "odqs"                    # sub-folder for ODQS training data: odqs | rejection_sampling
+  source: self                    # which candidates the training data came from: self | peer
+
+# ---------------------------------------------------------------------------
+# Generation / evaluation
+# ---------------------------------------------------------------------------
+gen:
+  k_values: [1, 5, 10]            # Pass@k values to report
+  num_samples: 25                 # answer samples per evaluation (capped at max(k_values))
+  pass_k: 5                       # the k used to select hard problems and to score candidate questions
+  pass_at_k_threshold: 0.5        # a problem is "student-unsolvable" if static Pass@pass_k is below this
+  retry_on_fail: 5
+  take_every: 1                   # sub-sample the source math dataset (1 = use everything)
+  iteration: 0                    # data-collection round; always 0 in the paper (files are suffixed _0 / iter0)
+
+  # ODQS data collection
+  num_candidates: 5               # candidate questions sampled per turn (per source for Peer-ODQS)
+  eps: 0.2                        # with prob. eps the conversation continues with a random non-best candidate
+  use_delta_reward: true          # GRPO reward = Pass@k after the question minus Pass@k before it
+  dpo_margin_min: 0.0005          # keep a preference pair if best - other >= this margin (i.e. any strict improvement)
+  dpo_margin_max: 1.0
+  dpo_max_pairs_per_turn:         # optional cap on pairs per turn; empty = no cap
+
+  # experimental (codes/experimental/collect_self_odqs_rollout.py), not used in the paper
+  rollout_horizon: 3
+  rollout_gamma: 0.9
+  sft_gate_min: 0.85
+
+# ---------------------------------------------------------------------------
+# ODQS training (LoRA; SFT stage is optional, DPO is the method used in the paper)
+# ---------------------------------------------------------------------------
+train:
+  train_size: 0.5                 # fractions used when splitting the curated problems
+  val_size: 0.2                   # (the remainder is the test split)
+  sft_use_8bit: True
+  dpo_use_8bit: True
+  lora_r: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  lora_target_modules: ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+  sft_batch_size: 1
+  dpo_batch_size: 1               # per GPU
+  grad_accum: 8
+  sft_lr: 1e-4
+  dpo_lr: 1e-5
+  beta: 0.2                       # DPO beta
+  sft_epochs: 0                   # 0 = skip the SFT stage
+  dpo_epochs: 5
+  dpo_eval_steps: 25
+  sft_eval_steps: 25
+  gpus: [0,1,2,3,4,5,6,7]
+
+  # experimental (codes/experimental/train_grpo.py), not used in the paper
+  sft_use_4bit: True
+  grpo_use_4bit: True
+  grpo_batch_size_groups: 1
+  grpo_lr: 5e-6
+  grpo_epochs: 5
+  grpo_tau: 0.7
+  grpo_reward_norm: "zscore"
+  grpo_kl_coeff: 0.0
+
+# ---------------------------------------------------------------------------
+# Interaction
+#
+# Turn indexing. A transcript is a list of messages: index 0 is the teacher
+# greeting, odd indices are student questions, even indices are teacher replies.
+# Turn t in the paper (t = 0..5) is evaluated at message index 2t + 1:
+#     paper turn   0  1  2  3  4  5
+#     index        1  3  5  7  9  11
+# So total_turns=11 gives the paper's N = 5 questioning turns.
+# ---------------------------------------------------------------------------
+experiment:
+  name: unscaffolded              # label for this run; results go to <experiments>/<name>/<teacher>/<student>/<dataset>
+  scaffolded: False               # True = Scaffolded student prompt, False = Unscaffolded
+  assessment_turn: -1             # -1 = no assessment, 1 = Pre-Assessment (paper turn 0), 5 = Mid-Assessment (paper turn 2)
+  dataset: gsm8k                  # gsm8k (math) | humaneval_opc (code)
+  total_turns: 11
+  start_from_turn: 1              # 1 = new conversation
+  ood: False                      # leave False (evaluating on a separate problem set is not part of the paper)
+  num_workers: 128                # problems processed in parallel
+  chunk_size: 256                 # results are checkpointed after every chunk
+
+# ---------------------------------------------------------------------------
+# Analysis (codes.run_analysis)
+# ---------------------------------------------------------------------------
 analysis:
-  baseline: unguided                          # experiment name for CoT
-  compare: cot                                # experiment name for Unguided
-  model: Qwen/Qwen3-Embedding-0.6B            # Model to use for computing sentence embeddings
+  task: question_type             # progress | similarity_embedding | similarity_judge | similarity_rank | leakage | question_type
+  baseline: unscaffolded          # experiment name of the baseline condition
+  compare: scaffolded             # experiment name of the condition being analysed
+  model: Qwen/Qwen3-Embedding-0.6B  # sentence-embedding model for similarity_embedding
   batch_size: 16
+  k: 5                            # Pass@k used to decide which problems "improved"
 
 hydra:
   run:

@@ -12,7 +12,7 @@ or from being better at extracting information from teacher responses (evaluator
 Four conditions:
     Generator       Evaluator
     -----------     -----------
-    No-Training     No-Training     baseline (= standard unguided/pre_cot run)
+    No-Training     No-Training     baseline (= standard unscaffolded/pre_assessment run)
     ODQS            ODQS            current reported result
     ODQS            No-Training     do ODQS questions help a weaker evaluator?
     No-Training     ODQS            does ODQS advantage come from the evaluator?
@@ -81,7 +81,7 @@ def run_problem_cross(
     num_samples: int,
     total_turns: int,
     assessment_turn: int,
-    use_cot: bool,
+    use_scaffold: bool,
 ) -> Tuple[Dict, Dict] | None:
     """
     Run one problem end-to-end:
@@ -173,7 +173,7 @@ def run_problem_cross(
                 generator_client if is_student else teacher_client,
                 generator_name if is_student else teacher_name,
                 generator_temperature if is_student else teacher_temperature,
-                use_cot,
+                use_scaffold,
             )
             texts.append(replies[0])
 
@@ -203,7 +203,7 @@ def main(cfg: DictConfig) -> None:
     data_type: str = cfg.data.type
     total_turns: int = int(cfg.experiment.total_turns)
     assessment_turn: int = int(cfg.experiment.assessment_turn)
-    use_cot: bool = bool(cfg.experiment.cot)
+    use_scaffold: bool = bool(cfg.experiment.scaffolded)
 
     teacher_name: str = str(cfg.teacher.model)
     generator_name: str = str(cfg.student.lora.name or cfg.student.model)
@@ -289,7 +289,7 @@ def main(cfg: DictConfig) -> None:
                     num_samples,
                     total_turns,
                     assessment_turn,
-                    use_cot,
+                    use_scaffold,
                 ): str(problem["id"])
                 for problem in chunk
             }

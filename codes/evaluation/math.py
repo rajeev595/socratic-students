@@ -153,8 +153,8 @@ def evaluate_math_completion(
       - If both numeric -> exact float equality check.
 
     Stage B (LLM judge):
-      - If Stage A fails or is non-numeric, ask a small LLM (“gpt-4o-mini”)
-        to answer YES/NO for equivalence.
+      - If Stage A fails or is non-numeric, ask the judge model passed in `client`
+        (the teacher) to answer YES/NO for equivalence.
 
     Args:
         model_response: The model's raw text answer.

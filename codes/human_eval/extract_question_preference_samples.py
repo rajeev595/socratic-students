@@ -7,12 +7,12 @@ student questions (randomly labeled A/B) and judge which question requires the
 tutor to explain a mathematical/programming idea to answer it.
 
 Scaffold per task:
-  math   (gsm8k)        : pre_cot  vs selfguided_zero_margin_pre_cot
-  coding (humaneval_opc): mid_cot  vs selfguided_zero_margin_mid_cot
+  math   (gsm8k)        : pre_assessment  vs self_odqs_pre_assessment
+  coding (humaneval_opc): mid_assessment  vs self_odqs_mid_assessment
 
 Outputs (all under --out_dir):
   - preference_samples_{student}_{dataset}.jsonl  -- one item per line (includes label_a, label_b)
-  - preference_samples_{student}_{dataset}.csv    -- for AMT/Prolific upload (ASCII-safe)
+  - preference_samples_{student}_{dataset}.csv    -- for Amazon Mechanical Turk upload (ASCII-safe)
 
 Usage:
   python -m codes.human_eval.extract_question_preference_samples \
@@ -37,15 +37,15 @@ TASK_CONFIGS = {
     "math": {
         "dataset":      "gsm8k",
         "split_dir":    "splits_0.5",
-        "baseline_exp": "pre_cot",
-        "compare_exp":  "selfguided_zero_margin_pre_cot",
+        "baseline_exp": "pre_assessment",
+        "compare_exp":  "self_odqs_pre_assessment",
         "trans_subdir": "transcripts_0",
     },
     "coding": {
         "dataset":      "humaneval_opc",
-        "split_dir":    "splits_0.3",
-        "baseline_exp": "mid_cot",
-        "compare_exp":  "selfguided_zero_margin_mid_cot",
+        "split_dir":    "splits_0.5",
+        "baseline_exp": "mid_assessment",
+        "compare_exp":  "self_odqs_mid_assessment",
         "trans_subdir": "transcripts_0",
     },
 }

@@ -20,7 +20,7 @@ You may ask the tutor any relevant questions (clarification questions, requireme
 """
 
 
-def get_gsm_student_sys_cot_prompt(problem: Dict[str, Any]) -> str:
+def get_gsm_student_sys_scaffolded_prompt(problem: Dict[str, Any]) -> str:
     return f"""\
 You are an AI assistant tasked with solving math problems. To help you improve your skills, your math tutor has posed the following problem:
 

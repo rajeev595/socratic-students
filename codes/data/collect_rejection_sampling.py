@@ -1,3 +1,18 @@
+"""
+Rejection Sampling data collection (baseline).
+
+Same candidate sampling as codes.data.collect_self_odqs, but the best candidate question at every
+turn is picked by an LLM judge (the teacher model) instead of by the student's downstream Pass@k.
+
+Output (under <data>/<teacher>/<dataset>/<data.name>/):
+  <student>_sft_iter0_<split>.jsonl    judge-selected questions
+  <student>_dpo_iter0_<split>.jsonl    (selected > rejected) preference pairs
+
+Usage:
+    python -m codes.data.collect_rejection_sampling student.model=qwen7 data.type=math experiment.dataset=gsm8k \
+        data.name=rejection_sampling data.split=train data.data_amount=1000 experiment.name=rejection_sampling
+"""
+
 import os
 import time
 import json
@@ -13,10 +28,9 @@ from openai import OpenAI
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# --- your project imports (unchanged) ---
 from codes.data.utils import format_messages, msgs_to_string
 from codes.prompts.utils import _select_sys_prompt, _problem_greeting
-from codes.run_interact import interact  # reusing your interact()
+from codes.run_interact import interact
 from codes.utils.llm.server import build_client
 from codes.utils.llm.chat import chat_complete
 from codes.utils.vars import set_envs
@@ -144,11 +158,11 @@ def run_problem_judge(
     interaction_problem: Dict[str, Any],
     evaluation_problem: Dict[str, Any],
     # generation knobs
-    rlhf_samples: int,
+    num_candidates: int,
     start_from_turn: int,
     total_turns: int,
     eps: float,
-    use_cot: bool,
+    use_scaffold: bool,
     # judge knobs
     judge_temperature: float,
     judge_extra_instructions: str,
@@ -186,12 +200,12 @@ def run_problem_judge(
             True,
             texts,
             interaction_problem,
-            rlhf_samples,
+            num_candidates,
             data_type,
             student_client,
             student_name,
             student_temperature,
-            use_cot
+            use_scaffold
         )
         total_student_prompt_tks += p_tks
         total_student_completion_tks += c_tks
@@ -219,10 +233,10 @@ def run_problem_judge(
             propensity = 1 - eps
             chosen_student_msg = student_replies[best_idx]
         else:
-            non_best = [i for i in range(rlhf_samples) if i != best_idx]
+            non_best = [i for i in range(num_candidates) if i != best_idx]
             idx = random.choice(non_best) if non_best else best_idx
             appended_idx = idx
-            propensity = eps / max(1, rlhf_samples)
+            propensity = eps / max(1, num_candidates)
             chosen_student_msg = student_replies[idx]
 
         # Get teacher reply for the appended path
@@ -235,7 +249,7 @@ def run_problem_judge(
             teacher_client,
             teacher_name,
             teacher_temperature,
-            use_cot
+            use_scaffold
         )
         teacher_reply = teacher_reply[0]
         total_teacher_prompt_tks += p_tks
@@ -245,9 +259,9 @@ def run_problem_judge(
         texts += [chosen_student_msg, teacher_reply]
 
         # ---- Prompt messages used to elicit candidate questions (for SFT/DPO storage)
-        sys_prompt = _select_sys_prompt(data_type, use_cot, True, evaluation_problem)
+        sys_prompt = _select_sys_prompt(data_type, use_scaffold, True, evaluation_problem)
         prompt_messages = [{"role": "system", "content": sys_prompt}] + format_messages(
-            texts[:-2],  # messages BEFORE the chosen Q/A (like your original SFT/DPO prompt)
+            texts[:-2],  # messages BEFORE the chosen Q/A (same prompt format as the ODQS data)
             starting_with_user=True
         )
 
@@ -263,11 +277,11 @@ def run_problem_judge(
 
         # ---- DPO pairs: winner vs everyone else (judge baseline)
         if judge_use_all_as_rejects:
-            rejected_indices = [i for i in range(rlhf_samples) if i != best_idx]
+            rejected_indices = [i for i in range(num_candidates) if i != best_idx]
         else:
             # Fallback: if someone wants fewer pairs, randomly pick 1 negative (simple and fast)
             rejected_indices = []
-            non_best = [i for i in range(rlhf_samples) if i != best_idx]
+            non_best = [i for i in range(num_candidates) if i != best_idx]
             if non_best:
                 rejected_indices.append(random.choice(non_best))
 
@@ -312,34 +326,34 @@ def main(cfg: DictConfig) -> None:
 
     fpath_sft = os.path.join(
         base_dir, name,
-        f"{cfg.student.model}_cot_sft_iter{cfg.gen.dagger_iter}_{cfg.data.split}.jsonl" if cfg.experiment.cot else f"{cfg.student.model}_sft_iter{cfg.gen.dagger_iter}_{cfg.data.split}.jsonl"
+        f"{cfg.student.model}_scaffolded_sft_iter{cfg.gen.iteration}_{cfg.data.split}.jsonl" if cfg.experiment.scaffolded else f"{cfg.student.model}_sft_iter{cfg.gen.iteration}_{cfg.data.split}.jsonl"
     )
     fpath_dpo = os.path.join(
         base_dir, name,
-        f"{cfg.student.model}_cot_dpo_iter{cfg.gen.dagger_iter}_{cfg.data.split}.jsonl" if cfg.experiment.cot else f"{cfg.student.model}_dpo_iter{cfg.gen.dagger_iter}_{cfg.data.split}.jsonl"
+        f"{cfg.student.model}_scaffolded_dpo_iter{cfg.gen.iteration}_{cfg.data.split}.jsonl" if cfg.experiment.scaffolded else f"{cfg.student.model}_dpo_iter{cfg.gen.iteration}_{cfg.data.split}.jsonl"
     )
 
     existing_pids = set()
     count_dpo, count_sft = 0, 0
 
-    # Resume dedupe by dagger_iter for SFT/DPO
+    # Resume dedupe by iteration for SFT/DPO
     if os.path.exists(fpath_sft):
         with open(fpath_sft, "r") as f:
             for line in f:
                 ex = json.loads(line)
                 count_sft += 1
-                if ex.get("dagger_iter") == cfg.gen.dagger_iter:
+                if ex.get("iteration") == cfg.gen.iteration:
                     existing_pids.add(ex["problem"]["id"])
-        logger.info(f"Loaded {count_sft} existing SFT-{cfg.gen.dagger_iter} examples from {fpath_sft}")
+        logger.info(f"Loaded {count_sft} existing SFT-{cfg.gen.iteration} examples from {fpath_sft}")
 
     if os.path.exists(fpath_dpo):
         with open(fpath_dpo, "r") as f:
             for line in f:
                 ex = json.loads(line)
                 count_dpo += 1
-                if ex.get("dagger_iter") == cfg.gen.dagger_iter:
+                if ex.get("iteration") == cfg.gen.iteration:
                     existing_pids.add(ex["problem"]["id"])
-        logger.info(f"Loaded {count_dpo} existing DPO-{cfg.gen.dagger_iter} examples from {fpath_dpo}")
+        logger.info(f"Loaded {count_dpo} existing DPO-{cfg.gen.iteration} examples from {fpath_dpo}")
 
     # Problems
     problems_fpath = os.path.join(
@@ -354,7 +368,7 @@ def main(cfg: DictConfig) -> None:
     ][: max(0, cfg.data.data_amount - len(existing_pids))]
     logger.info(f"Interaction problems: finished {len(existing_pids)} | pending {len(interaction_problems)}")
 
-    # OOD evaluation set (kept symmetric with your runner, but unused by judge)
+    # OOD evaluation set (unused by the judge)
     evaluation_problems = interaction_problems
     if getattr(cfg.experiment, "ood", False):
         ood_problems_path = os.path.join(
@@ -415,11 +429,11 @@ def main(cfg: DictConfig) -> None:
                     interaction_problem,
                     evaluation_problem,
                     # generation knobs
-                    cfg.gen.rlhf_samples,
+                    cfg.gen.num_candidates,
                     cfg.experiment.start_from_turn,
                     cfg.experiment.total_turns,
                     cfg.gen.eps,
-                    cfg.experiment.cot,
+                    cfg.experiment.scaffolded,
                     # judge knobs
                     judge_temperature,
                     judge_extra_instructions,
@@ -438,13 +452,13 @@ def main(cfg: DictConfig) -> None:
 
                 # Save DPO
                 for ex in pairs:
-                    ex["dagger_iter"] = cfg.gen.dagger_iter
+                    ex["iteration"] = cfg.gen.iteration
                     f_dpo.write(json.dumps(ex, ensure_ascii=False) + "\n")
                 count_dpo += len(pairs)
 
                 # Save SFT
                 for ex in chosen:
-                    ex["dagger_iter"] = cfg.gen.dagger_iter
+                    ex["iteration"] = cfg.gen.iteration
                     f_sft.write(json.dumps(ex, ensure_ascii=False) + "\n")
                 count_sft += len(chosen)
 

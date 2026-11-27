@@ -1,4 +1,19 @@
-# grpo_guide.py
+"""
+Peer-ODQS data collection.
+
+Same procedure as codes.data.collect_self_odqs, but the candidate pool at every turn contains
+`gen.num_candidates` questions from the student and `gen.num_candidates` questions from a
+stronger peer model (`peer.model`). Every record stores which model wrote the chosen question
+("source": "student" | "peer").
+
+Output (under <data>/<teacher>/<dataset>/<data.name>/):
+  <student>__<peer>__{sft,dpo,grpo}_iter0_<split>.jsonl
+
+Usage:
+    python -m codes.data.collect_peer_odqs student.model=qwen7 peer.model=qwen30 data.type=math \
+        experiment.dataset=gsm8k data.name=odqs data.split=train data.data_amount=1000 experiment.name=peer_odqs
+"""
+
 
 import os
 import time
@@ -82,10 +97,10 @@ def run_problem(
     student_client: OpenAI,
     student_name: str,
     student_temperature: float,
-    # guide
-    guide_client: OpenAI,
-    guide_name: str,
-    guide_temperature: float,
+    # peer
+    peer_client: OpenAI,
+    peer_name: str,
+    peer_temperature: float,
     # problems
     interaction_problem: Dict[str, Any],
     evaluation_problem: Dict[str, Any],
@@ -93,15 +108,15 @@ def run_problem(
     k_values: List[int],
     pass_k: int,
     num_samples: int,
-    # RLHF/GRPO sampling
-    rlhf_samples_student: int,
-    rlhf_samples_guide: int,
+    # candidate sampling
+    num_candidates_student: int,
+    num_candidates_peer: int,
     # schedule
     assessment_turn: int,
     start_from_turn: int = 1,
     total_turns: int = 10,
     eps: float = 0.2,
-    use_cot: bool = False,
+    use_scaffold: bool = False,
     is_ood: bool = False,
     # GRPO / DPO knobs
     use_delta_reward: bool = False,
@@ -114,10 +129,10 @@ def run_problem(
     List[Dict[str, Any]],   # grpo_groups
     int, int,               # teacher prompt/completion tks
     int, int,               # student prompt/completion tks
-    int, int,               # guide prompt/completion tks
+    int, int,               # peer prompt/completion tks
 ]:
     """
-    One problem end-to-end with a *guide* model contributing candidates alongside the student.
+    One problem end-to-end with a *peer* model contributing candidates alongside the student.
     """
     try:
         assert interaction_problem["id"] == evaluation_problem["id"], "pid of interaction and evaluation doesn't match!"
@@ -161,38 +176,38 @@ def run_problem(
                 )
                 assessment_injected = True
 
-            # ---- Candidate generation: student + guide
+            # ---- Candidate generation: student + peer
             student_replies, sp_tks, sc_tks = interact(
                 True, 
                 texts, 
                 interaction_problem, 
-                rlhf_samples_student,
+                num_candidates_student,
                 data_type, 
                 student_client, 
                 student_name, 
                 student_temperature, 
-                use_cot
+                use_scaffold
             )
             total_student_prompt_tks += sp_tks
             total_student_completion_tks += sc_tks
 
-            guide_replies, gp_tks, gc_tks = interact(
+            peer_replies, gp_tks, gc_tks = interact(
                 True, 
                 texts, 
                 interaction_problem, 
-                rlhf_samples_guide,
+                num_candidates_peer,
                 data_type, 
-                guide_client, 
-                guide_name, 
-                guide_temperature, 
-                use_cot
+                peer_client, 
+                peer_name, 
+                peer_temperature, 
+                use_scaffold
             )
             total_guide_prompt_tks += gp_tks
             total_guide_completion_tks += gc_tks
 
             # Label sources and concatenate
-            # Each element: (student_reply, "student"/"guide")
-            candidates = [(r, "student") for r in student_replies] + [(r, "guide") for r in guide_replies]
+            # Each element: (student_reply, "student"/"peer")
+            candidates = [(r, "student") for r in student_replies] + [(r, "peer") for r in peer_replies]
 
             # ---- Teacher answers for each candidate
             teacher_replies = []
@@ -206,7 +221,7 @@ def run_problem(
                     teacher_client, 
                     teacher_name, 
                     teacher_temperature, 
-                    use_cot
+                    use_scaffold
                 )
                 teacher_replies.append(teacher_reply[0])
                 total_teacher_prompt_tks += tp_tks
@@ -262,7 +277,7 @@ def run_problem(
                 total_student_completion_tks += c_tks
 
             # ---- Prompt messages (used for SFT/DPO/GRPO payloads)
-            sys_prompt = _select_sys_prompt(data_type, use_cot, True, evaluation_problem)
+            sys_prompt = _select_sys_prompt(data_type, use_scaffold, True, evaluation_problem)
             prompt_messages = [{"role": "system", "content": sys_prompt}] + format_messages(texts, starting_with_user=True)
 
             # ---------- GRPO group ----------
@@ -294,7 +309,7 @@ def run_problem(
                 )
                 group["candidates"].append({
                     "text": q_text,
-                    "source": src,  # <-- student | guide
+                    "source": src,  # <-- student | peer
                     "reward": float(reward),
                     "metrics_current": metrics_current,
                     "metrics_baseline": metrics_baseline,
@@ -331,7 +346,7 @@ def run_problem(
                     "problem": evaluation_problem,
                     "turn": turn,
                     "propensity": propensity,
-                    "source": src,  # <-- student | guide
+                    "source": src,  # <-- student | peer
                 })
 
             # ---- DPO pairs (margin band + optional capping)
@@ -376,7 +391,7 @@ def run_problem(
                     "rejected_reward": rejected_reward_dict,
                     "problem": evaluation_problem,
                     "turn": turn,
-                    "source": src,  # <-- student | guide
+                    "source": src,  # <-- student | peer
                 })
 
             # ---- Prepare baseline for next turn (the branch we actually appended)
@@ -408,18 +423,18 @@ def main(cfg: DictConfig) -> None:
     # envs
     set_envs(cfg.paths.openai_api_key_fpath, cfg.paths.hf_home)
 
-    # Output files (include guide in filename to avoid collisions)
+    # Output files (include peer in filename to avoid collisions)
     base_dir = os.path.join(str(cfg.paths.data), str(cfg.teacher.model), str(cfg.experiment.dataset))
     split_dir = os.path.join(base_dir, f"splits_{cfg.gen.pass_at_k_threshold}")
     name = cfg.data.name
 
-    # Prefer same naming convention as your rlhf_guide (student_guide_*)
+    # Peer-ODQS files carry the peer model in their name: <student>__<peer>__<kind>_iter<i>_<split>
     def _fname(stem: str, ext: str) -> str:
         os.makedirs(os.path.join(base_dir, name), exist_ok=True)
 
         return os.path.join(
             base_dir, name,
-            f"{cfg.student.model}__{cfg.guide.model}__{stem}_iter{cfg.gen.dagger_iter}_{cfg.data.split}.{ext}"
+            f"{cfg.student.model}__{cfg.peer.model}__{stem}_iter{cfg.gen.iteration}_{cfg.data.split}.{ext}"
         )
 
     fpath_sft = _fname("sft", "jsonl")
@@ -429,35 +444,35 @@ def main(cfg: DictConfig) -> None:
     existing_pids = set()
     count_dpo = count_sft = count_grpo = 0
 
-    # Resume dedupe by dagger_iter for SFT/DPO/GRPO
+    # Resume dedupe by iteration for SFT/DPO/GRPO
     if os.path.exists(fpath_sft):
         with open(fpath_sft, "r") as f:
             for line in f:
                 ex = json.loads(line)
                 count_sft += 1
-                if ex.get("dagger_iter") == cfg.gen.dagger_iter:
+                if ex.get("iteration") == cfg.gen.iteration:
                     existing_pids.add(ex["problem"]["id"])
-        logger.info(f"Loaded {count_sft} existing SFT-{cfg.gen.dagger_iter} examples from {fpath_sft}")
+        logger.info(f"Loaded {count_sft} existing SFT-{cfg.gen.iteration} examples from {fpath_sft}")
 
     if os.path.exists(fpath_dpo):
         with open(fpath_dpo, "r") as f:
             for line in f:
                 ex = json.loads(line)
                 count_dpo += 1
-                if ex.get("dagger_iter") == cfg.gen.dagger_iter:
+                if ex.get("iteration") == cfg.gen.iteration:
                     existing_pids.add(ex["problem"]["id"])
-        logger.info(f"Loaded {count_dpo} existing DPO-{cfg.gen.dagger_iter} examples from {fpath_dpo}")
+        logger.info(f"Loaded {count_dpo} existing DPO-{cfg.gen.iteration} examples from {fpath_dpo}")
 
     if os.path.exists(fpath_grpo):
         with open(fpath_grpo, "r") as f:
             for line in f:
                 ex = json.loads(line)
                 count_grpo += 1
-                if ex.get("dagger_iter") == cfg.gen.dagger_iter:
+                if ex.get("iteration") == cfg.gen.iteration:
                     existing_pids.add(ex["problem"]["id"])
-        logger.info(f"Loaded {count_grpo} existing GRPO-{cfg.gen.dagger_iter} groups from {fpath_grpo}")
+        logger.info(f"Loaded {count_grpo} existing GRPO-{cfg.gen.iteration} groups from {fpath_grpo}")
 
-    # Problems (match your grpo.py sourcing)
+    # Problems
     problems_fpath = os.path.join(
         split_dir,
         f"{cfg.student.model}_{cfg.data.split}.json",
@@ -484,11 +499,11 @@ def main(cfg: DictConfig) -> None:
         logger.info(f"Evaluation (OOD) problems: finished {len(existing_pids)} | pending {len(evaluation_problems)}")
 
     # Clients
-    teacher_name, student_name, guide_name = cfg.teacher.model, cfg.student.model, cfg.guide.model
+    teacher_name, student_name, peer_name = cfg.teacher.model, cfg.student.model, cfg.peer.model
     teacher_client = build_client(teacher_name, cfg.teacher.gpus, cfg.teacher.server)
     student_client = build_client(student_name, cfg.student.gpus, cfg.student.server, lora=cfg.student.lora)
-    guide_client = build_client(guide_name, cfg.guide.gpus, cfg.guide.server)
-    logger.info("Teacher=%s | Student=%s | Guide=%s", teacher_name, student_name, guide_name)
+    peer_client = build_client(peer_name, cfg.peer.gpus, cfg.peer.server)
+    logger.info("Teacher=%s | Student=%s | Peer=%s", teacher_name, student_name, peer_name)
 
     # Files
     f_dpo = open(fpath_dpo, "a" if os.path.exists(fpath_dpo) else "w")
@@ -503,9 +518,9 @@ def main(cfg: DictConfig) -> None:
     if dpo_max_pairs_per_turn is not None:
         dpo_max_pairs_per_turn = int(dpo_max_pairs_per_turn)
 
-    # K per source (defaults: both = cfg.gen.rlhf_samples)
-    rlhf_samples_student = int(getattr(cfg.gen, "rlhf_samples_student", getattr(cfg.gen, "rlhf_samples", 5)))
-    rlhf_samples_guide = int(getattr(cfg.gen, "rlhf_samples_guide", getattr(cfg.gen, "rlhf_samples", 5)))
+    # K per source (defaults: both = cfg.gen.num_candidates)
+    num_candidates_student = int(getattr(cfg.gen, "num_candidates_student", getattr(cfg.gen, "num_candidates", 5)))
+    num_candidates_peer = int(getattr(cfg.gen, "num_candidates_peer", getattr(cfg.gen, "num_candidates", 5)))
 
     # Token tallies
     total_teacher_prompt_tks = total_teacher_completion_tks = 0
@@ -529,20 +544,20 @@ def main(cfg: DictConfig) -> None:
                     teacher_client, teacher_name, cfg.teacher.temperature,
                     # student
                     student_client, cfg.student.lora.name or student_name, cfg.student.temperature,
-                    # guide
-                    guide_client, guide_name, cfg.guide.temperature,
+                    # peer
+                    peer_client, peer_name, cfg.peer.temperature,
                     # problems
                     interaction_problem, evaluation_problem,
                     # eval
                     cfg.gen.k_values, cfg.gen.pass_k, cfg.gen.num_samples,
-                    # RLHF K
-                    rlhf_samples_student, rlhf_samples_guide,
+                    # candidates per source
+                    num_candidates_student, num_candidates_peer,
                     # schedule
                     cfg.experiment.assessment_turn,
                     cfg.experiment.start_from_turn,
                     cfg.experiment.total_turns,
                     cfg.gen.eps,
-                    cfg.experiment.cot,
+                    cfg.experiment.scaffolded,
                     cfg.experiment.ood,
                     # GRPO/DPO knobs
                     use_delta_reward,
@@ -567,19 +582,19 @@ def main(cfg: DictConfig) -> None:
 
                 # Save DPO
                 for ex in pairs:
-                    ex["dagger_iter"] = cfg.gen.dagger_iter
+                    ex["iteration"] = cfg.gen.iteration
                     f_dpo.write(json.dumps(ex, ensure_ascii=False) + "\n")
                 count_dpo += len(pairs)
 
                 # Save SFT
                 for ex in chosen:
-                    ex["dagger_iter"] = cfg.gen.dagger_iter
+                    ex["iteration"] = cfg.gen.iteration
                     f_sft.write(json.dumps(ex, ensure_ascii=False) + "\n")
                 count_sft += len(chosen)
 
                 # Save GRPO
                 for group in grpo_groups:
-                    group["dagger_iter"] = cfg.gen.dagger_iter
+                    group["iteration"] = cfg.gen.iteration
                     f_grpo.write(json.dumps(group, ensure_ascii=False) + "\n")
                 count_grpo += len(grpo_groups)
 
@@ -612,7 +627,7 @@ def main(cfg: DictConfig) -> None:
         f"Student-{cfg.student.model} tokens — prompt={total_student_prompt_tks}, completion={total_student_completion_tks}"
     )
     logger.info(
-        f"Guide-{cfg.guide.model} tokens — prompt={total_guide_prompt_tks}, completion={total_guide_completion_tks}"
+        f"Peer-{cfg.peer.model} tokens — prompt={total_guide_prompt_tks}, completion={total_guide_completion_tks}"
     )
 
     elapsed = time.perf_counter() - start_time
