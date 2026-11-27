@@ -32,8 +32,8 @@ measure whether the student can now solve the problem (Pass@k). This repository 
 ## Installation
 
 ```bash
-git clone <this repository>
-cd <this repository>
+git clone https://github.com/rajeev595/socratic-students.git
+cd socratic-students
 conda create -n socratic python=3.13 -y && conda activate socratic
 pip install -r requirements.txt
 ```
