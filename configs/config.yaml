@@ -1,8 +1,8 @@
 paths:
   openai_api_key_fpath: /home/ambati/.openai_api_key.zshrc        # path to OpenAI API key
-  data: /playpen-shared/ambati/interact_plus/data/                # path to data
-  experiments: /playpen-shared/ambati/interact_plus/experiments/  # path to save experiment results
-  hf_home: /playpen-shared/ambati/hf_home/                        # Hugging Face cache dir
+  data: /playpen-ssd2/ambati/interact_plus/data/                # path to data
+  experiments: /playpen-ssd2/ambati/interact_plus/experiments/  # path to save experiment results
+  hf_home: /playpen-ssd2/ambati/hf_home/                        # Hugging Face cache dir
 
 # Model
 teacher:
@@ -30,7 +30,7 @@ judge:
   model: llama70
   temperature: 0.8
   server: "vllm"    # sglang/vllm/hf
-  gpus: [0,1,2,3]
+  gpus: [4,5,6,7]
 
 # Data & paths
 data:
@@ -101,6 +101,15 @@ experiment:
   chunk_size: 256
 
 plot:
+
+evaluator:
+  model: mistral7                   # model used for Pass@k evaluation step
+  temperature: 0.3
+  server: "vllm"
+  gpus: [4,5,6,7]
+  lora:
+    name:
+    path:
 
 analysis:
   baseline: unguided                          # experiment name for CoT

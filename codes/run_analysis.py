@@ -15,6 +15,7 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib import rcParams
+from matplotlib.patches import Patch
 # Use LaTeX for all text rendering
 rcParams.update({
     "text.usetex": True,
@@ -1224,7 +1225,7 @@ def run_similarity_judge_ranking(cfg: DictConfig) -> None:
 
 
 def run_leakage(cfg: DictConfig) -> None:
-    """Run LLM-judge leakage scoring on teacher turns; compute overall and improved-only aggregates."""
+    """Run LLM-judge leakage scoring on teacher turns; report the mean across turns (overall and improved-only)."""
     t0 = time.perf_counter()
 
     dataset = str(cfg.experiment.dataset)
@@ -1398,43 +1399,163 @@ def _classify_qtypes_problem(
     }
 
 
+_QTYPE_PAPER_NAMES = {
+    "unguided":                        "Unscaffolded",
+    "cot":                             "Scaffolded",
+    "pre_cot":                         "Pre-Assessment",
+    "mid_cot":                         "Mid-Assessment",
+    "selfguided_zero_margin_pre_cot":  "Self-ODQS",
+    "selfguided_zero_margin_mid_cot":  "Self-ODQS",
+    "selfguided_zero_margin":          "Self-ODQS",
+    "peerguided_zero_margin_pre_cot":  "Peer-ODQS",
+    "peerguided_zero_margin_mid_cot":  "Peer-ODQS",
+}
+
+# Human-readable suptitles keyed by (compare, baseline)
+_COMPARISON_TITLES: dict = {
+    # Scaffolding effect
+    ("cot",                            "unguided"):  "Scaffolded vs. Unscaffolded",
+    # Assessment effect (scaffold vs scaffold + assessment)
+    ("pre_cot",                        "cot"):       "Pre-Assessment vs. No Assessment",
+    ("mid_cot",                        "cot"):       "Mid-Assessment vs. No Assessment",
+    # Assessment vs unscaffolded (combined effect)
+    ("pre_cot",                        "unguided"):  "Pre-Assessment vs. Unscaffolded",
+    ("mid_cot",                        "unguided"):  "Mid-Assessment vs. Unscaffolded",
+    # Training effect (same scaffold, trained vs untrained)
+    ("selfguided_zero_margin_pre_cot", "pre_cot"):   "Self-ODQS vs. No Training",
+    ("selfguided_zero_margin_mid_cot", "mid_cot"):   "Self-ODQS vs. No Training",
+    ("peerguided_zero_margin_pre_cot", "pre_cot"):   "Peer-ODQS vs. No Training",
+    ("peerguided_zero_margin_mid_cot", "mid_cot"):   "Peer-ODQS vs. No Training",
+    # Combined effect (trained vs unscaffolded)
+    ("selfguided_zero_margin_pre_cot", "unguided"):  "Self-ODQS vs. Unscaffolded",
+    ("selfguided_zero_margin_mid_cot", "unguided"):  "Self-ODQS vs. Unscaffolded",
+    ("peerguided_zero_margin_pre_cot", "unguided"):  "Peer-ODQS vs. Unscaffolded",
+    ("peerguided_zero_margin_mid_cot", "unguided"):  "Peer-ODQS vs. Unscaffolded",
+}
+
+
+def _qtype_paper_name(name: str) -> str:
+    return _QTYPE_PAPER_NAMES.get(name, name.replace("_", r"\_"))
+
+
+# Context-specific subplot label overrides: (compare, baseline, condition) → label
+_CONTEXT_SUBPLOT_NAMES: dict = {
+    # pre_cot/mid_cot as the no-training baseline for ODQS comparisons
+    ("selfguided_zero_margin_pre_cot", "pre_cot",  "pre_cot"):  "No Training",
+    ("selfguided_zero_margin_mid_cot", "mid_cot",  "mid_cot"):  "No Training",
+    ("peerguided_zero_margin_pre_cot", "pre_cot",  "pre_cot"):  "No Training",
+    ("peerguided_zero_margin_mid_cot", "mid_cot",  "mid_cot"):  "No Training",
+    # cot as the no-assessment baseline for assessment comparisons
+    ("pre_cot",                        "cot",      "cot"):      "No Assessment",
+    ("mid_cot",                        "cot",      "cot"):      "No Assessment",
+}
+
+
+def _qtype_subplot_name(name: str, compare_name: str, baseline_name: str) -> str:
+    return _CONTEXT_SUBPLOT_NAMES.get(
+        (compare_name, baseline_name, name),
+        _qtype_paper_name(name),
+    )
+
+
+def _qtype_comparison_title(compare_name: str, baseline_name: str) -> str:
+    return _COMPARISON_TITLES.get(
+        (compare_name, baseline_name),
+        f"{_qtype_paper_name(compare_name)} vs. {_qtype_paper_name(baseline_name)}",
+    )
+
+
+# ── Question-type palette & labels ────────────────────────────────────────────
+# Human-readable names for the four student-question types (see the
+# judge_question_type_system_prompt in codes/prompts/{math,code}.py).
+QTYPE_NAMES = {
+    "A": "Unfocused",
+    "B": "Conceptual",
+    "C": "Hypothesis",
+    "D": "Grounded",
+}
+
+# Soft pastel palette, one distinct hue per type (no red). Pastels sit close
+# together, so the in-bar percentage labels and white segment gaps carry the
+# distinction too.
+QTYPE_COLORS = {
+    "A": "#AFDDF7",  # sky blue
+    "B": "#F4B784",  # peach
+    "C": "#8ED3B4",  # mint
+    "D": "#AE9DE0",  # lavender
+}
+
+# All fills are light, so value labels are black throughout.
+QTYPE_TEXT_COLORS = {"A": "black", "B": "black", "C": "black", "D": "black"}
+
+
 def _plot_qtype_distribution(
     baseline_name: str,
     compare_name: str,
     baseline_dist: Dict,
     compare_dist: Dict,
     out_dir: str,
+    tag: str = "",
 ) -> None:
     TYPE_LABELS = ["A", "B", "C", "D"]
-    TYPE_COLORS = {"A": "#e74c3c", "B": "#f39c12", "C": "#3498db", "D": "#2ecc71"}
     turns = sorted(baseline_dist.keys())
     x = np.arange(len(turns))
 
-    _, axes = plt.subplots(1, 2, figsize=(10, 4), sharey=True)
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5.8), sharey=True)
     for ax, dist, name in [(axes[0], baseline_dist, baseline_name), (axes[1], compare_dist, compare_name)]:
         bottoms = np.zeros(len(turns))
         for q_type in TYPE_LABELS:
-            vals = np.array([dist.get(t, {}).get(q_type, 0.0) for t in turns])
-            ax.bar(x, vals, bottom=bottoms, color=TYPE_COLORS[q_type], label=f"Type {q_type}", width=0.6)
+            vals = np.array([dist.get(t, {}).get(q_type, 0.0) for t in turns]) * 100
+            # White edges give the surface gap between stacked segments, which
+            # keeps neighbouring segments crisp.
+            bars = ax.bar(
+                x, vals, bottom=bottoms,
+                color=QTYPE_COLORS[q_type], label=QTYPE_NAMES[q_type],
+                width=0.6, edgecolor="white", linewidth=1.2,
+            )
+            for bar, bot, val in zip(bars, bottoms, vals):
+                if val >= 6:
+                    ax.text(
+                        bar.get_x() + bar.get_width() / 2,
+                        bot + val / 2,
+                        rf"{val:.0f}\%",
+                        ha="center", va="center",
+                        fontsize=11, color=QTYPE_TEXT_COLORS[q_type],
+                    )
             bottoms += vals
-        ax.set_title(name.replace("_", r"\_"))
+        ax.set_title(_qtype_subplot_name(name, compare_name, baseline_name), fontsize=22)
         ax.set_xticks(x)
-        ax.set_xticklabels([f"T{t}" for t in turns])
-        ax.set_xlabel("Student Turn")
-        ax.set_ylim(0, 1.05)
-    axes[0].set_ylabel("Fraction of Questions")
-    axes[1].legend(loc="upper right", fontsize=9)
-    plt.suptitle("Question Type Distribution by Turn", fontsize=13)
-    plt.tight_layout()
-    out = os.path.join(out_dir, "question_type_distribution.png")
-    plt.savefig(out, dpi=150, bbox_inches="tight")
+        ax.set_xticklabels([str(i + 1) for i in range(len(turns))], fontsize=22)
+        ax.set_xlabel(r"Turns", fontsize=22)
+        ax.set_ylim(0, 103)
+        ax.tick_params(axis="y", labelsize=22)
+        ax.grid(True, axis="y", linestyle="--", alpha=0.4)
+        ax.set_axisbelow(True)
+    axes[0].set_ylabel(r"Questions (\%)", fontsize=22)
+
+    # One shared legend in its own strip under the panels, so it can never sit
+    # on top of the bars (the stacks fill the full 0-100% height).
+    handles = [
+        Patch(facecolor=QTYPE_COLORS[t], edgecolor="white", label=QTYPE_NAMES[t])
+        for t in TYPE_LABELS
+    ]
+    fig.subplots_adjust(left=0.085, right=0.995, top=0.90, bottom=0.23, wspace=0.06)
+    fig.legend(
+        handles=handles, loc="lower center", ncol=len(TYPE_LABELS),
+        fontsize=19, frameon=False, bbox_to_anchor=(0.5, 0.0),
+        handlelength=1.5, handleheight=1.1,
+        columnspacing=1.8, handletextpad=0.6,
+    )
+    suffix = f"_{tag}" if tag else ""
+    for ext in ("png", "pdf"):
+        out = os.path.join(out_dir, f"question_type_distribution{suffix}.{ext}")
+        plt.savefig(out, dpi=600, bbox_inches="tight")
+        logger.info(f"[QuestionType] Plot -> {out}")
     plt.close()
-    logger.info(f"[QuestionType] Plot → {out}")
 
 
-def _plot_qtype_outcome(correlation_data: Dict, out_dir: str) -> None:
+def _plot_qtype_outcome(correlation_data: Dict, out_dir: str, tag: str = "") -> None:
     TYPE_LABELS = ["A", "B", "C", "D"]
-    TYPE_COLORS = {"A": "#e74c3c", "B": "#f39c12", "C": "#3498db", "D": "#2ecc71"}
 
     by_type: Dict[str, List[float]] = {t: [] for t in TYPE_LABELS}
     for info in correlation_data.values():
@@ -1443,21 +1564,37 @@ def _plot_qtype_outcome(correlation_data: Dict, out_dir: str) -> None:
         if dom in TYPE_LABELS and imp is not None:
             by_type[dom].append(float(imp))
 
-    _, ax = plt.subplots(figsize=(6, 4))
+    fig, ax = plt.subplots(figsize=(8.6, 4.4))
     data_for_plot = [by_type[t] for t in TYPE_LABELS]
-    labels = [f"Type {t}\n(n={len(by_type[t])})" for t in TYPE_LABELS]
-    bp = ax.boxplot(data_for_plot, patch_artist=True, labels=labels)
+    # Name over count on two lines, so four long names fit without rotating.
+    tick_labels = [
+        f"{QTYPE_NAMES[t]}\n" + rf"($n={len(by_type[t])}$)" for t in TYPE_LABELS
+    ]
+    bp = ax.boxplot(data_for_plot, patch_artist=True, tick_labels=tick_labels)
     for patch, q_type in zip(bp["boxes"], TYPE_LABELS):
-        patch.set_facecolor(TYPE_COLORS[q_type])
-        patch.set_alpha(0.7)
+        patch.set_facecolor(QTYPE_COLORS[q_type])
+        patch.set_alpha(0.85)
+    for median in bp["medians"]:
+        median.set_color("black")
+        median.set_linewidth(1.6)
+    for i, (q_type, vals) in enumerate(zip(TYPE_LABELS, data_for_plot)):
+        if vals:
+            med = float(np.median(vals))
+            ax.text(i + 1, med, rf"{med:.2f}", ha="center", va="bottom", fontsize=11)
     ax.axhline(0, color="gray", linestyle="--", linewidth=0.8)
-    ax.set_ylabel(r"Pass@k Improvement (ODQS $-$ Unguided)")
-    ax.set_title("Outcome Improvement by Dominant Question Type")
+    ax.set_ylabel(r"$\mathrm{Pass}@k$ Improvement", fontsize=22)
+    ax.set_xlabel(r"Question Type", fontsize=22, labelpad=8)
+    ax.tick_params(axis="y", labelsize=22)
+    ax.tick_params(axis="x", labelsize=17)
+    ax.grid(True, axis="y", linestyle="--", alpha=0.4)
+    ax.set_axisbelow(True)
     plt.tight_layout()
-    out = os.path.join(out_dir, "question_type_outcome.png")
-    plt.savefig(out, dpi=150, bbox_inches="tight")
+    suffix = f"_{tag}" if tag else ""
+    for ext in ("png", "pdf"):
+        out = os.path.join(out_dir, f"question_type_outcome{suffix}.{ext}")
+        plt.savefig(out, dpi=600, bbox_inches="tight")
+        logger.info(f"[QuestionType] Plot -> {out}")
     plt.close()
-    logger.info(f"[QuestionType] Plot → {out}")
 
 
 def run_question_type(cfg: DictConfig) -> None:
@@ -1496,46 +1633,48 @@ def run_question_type(cfg: DictConfig) -> None:
     pids = [str(d["id"]) for d in interaction_problems]
     logger.info(f"[QuestionType] {len(pids)} problems | baseline={baseline_name} | compare={compare_name}")
 
-    # Select domain-specific prompts
-    if cfg.data.type == "code":
-        system_prompt   = qtype_system_prompt_code
-        get_user_prompt = get_qtype_user_prompt_code
-    elif cfg.data.type == "math":
-        system_prompt   = qtype_system_prompt_math
-        get_user_prompt = get_qtype_user_prompt_math
-    else:
-        raise ValueError(f"cfg.data.type must be 'code' or 'math', got: {cfg.data.type}")
-
-    # Build judge
-    judge_model_name = getattr(cfg, "judge", {}).get("model", None) or str(cfg.teacher.model)
-    client = build_client(judge_model_name, cfg.judge.gpus, cfg.judge.server)
-
     TYPE_LABELS = ["A", "B", "C", "D"]
+    tag = f"{compare_name}_vs_{baseline_name}"
+    raw_out = os.path.join(out_dir, f"question_type_all_{tag}.json")
 
-    def _run_classification(transcripts_dir: str, label: str) -> Dict[str, Any]:
-        results: Dict[str, Any] = {}
-        with ThreadPoolExecutor(max_workers=max_workers) as ex:
-            futures = {
-                ex.submit(
-                    _classify_qtypes_problem,
-                    client, judge_model_name, problem,
-                    transcripts_dir, system_prompt, get_user_prompt,
-                ): str(problem["id"])
-                for problem in interaction_problems
-            }
-            for fut in tqdm(as_completed(futures), total=len(futures), desc=f"[QuestionType] {label}"):
-                pid = futures[fut]
-                results[pid] = fut.result()
-        return results
+    if os.path.exists(raw_out):
+        logger.info(f"[QuestionType] Loading cached classifications → {raw_out}")
+        cached = load_json_resilient(raw_out) or {}
+        baseline_results = cached.get("baseline", {})
+        compare_results  = cached.get("compare", {})
+    else:
+        # Select domain-specific prompts
+        if cfg.data.type == "code":
+            system_prompt   = qtype_system_prompt_code
+            get_user_prompt = get_qtype_user_prompt_code
+        elif cfg.data.type == "math":
+            system_prompt   = qtype_system_prompt_math
+            get_user_prompt = get_qtype_user_prompt_math
+        else:
+            raise ValueError(f"cfg.data.type must be 'code' or 'math', got: {cfg.data.type}")
 
-    baseline_results = _run_classification(baseline_transcripts, baseline_name)
-    compare_results  = _run_classification(compare_transcripts,  compare_name)
+        judge_model_name = getattr(cfg, "judge", {}).get("model", None) or str(cfg.teacher.model)
+        client = build_client(judge_model_name, cfg.judge.gpus, cfg.judge.server)
 
-    all_results = {"baseline": baseline_results, "compare": compare_results}
+        def _run_classification(transcripts_dir: str, label: str) -> Dict[str, Any]:
+            results: Dict[str, Any] = {}
+            with ThreadPoolExecutor(max_workers=max_workers) as ex:
+                futures = {
+                    ex.submit(
+                        _classify_qtypes_problem,
+                        client, judge_model_name, problem,
+                        transcripts_dir, system_prompt, get_user_prompt,
+                    ): str(problem["id"])
+                    for problem in interaction_problems
+                }
+                for fut in tqdm(as_completed(futures), total=len(futures), desc=f"[QuestionType] {label}"):
+                    pid = futures[fut]
+                    results[pid] = fut.result()
+            return results
 
-    # Save raw per-problem results
-    raw_out = os.path.join(out_dir, "question_type_all.json")
-    save_json_atomic(raw_out, all_results)
+        baseline_results = _run_classification(baseline_transcripts, baseline_name)
+        compare_results  = _run_classification(compare_transcripts,  compare_name)
+        save_json_atomic(raw_out, {"baseline": baseline_results, "compare": compare_results})
 
     # Aggregate type distribution per turn per condition
     def _aggregate_dist(results: Dict) -> Dict:
@@ -1554,12 +1693,19 @@ def run_question_type(cfg: DictConfig) -> None:
 
     baseline_dist = _aggregate_dist(baseline_results)
     compare_dist  = _aggregate_dist(compare_results)
-    dist_out = os.path.join(out_dir, "question_type_dist.json")
+    dist_out = os.path.join(out_dir, f"question_type_dist_{tag}.json")
     save_json_atomic(dist_out, {baseline_name: baseline_dist, compare_name: compare_dist})
 
     # Correlate dominant question type with pass@k improvement
-    itemized         = load_json_resilient(os.path.join(compare_root,  "itemized_results.json")) or {}
-    baseline_itemized = load_json_resilient(os.path.join(baseline_root, "itemized_results.json")) or {}
+    def _load_itemized(root):
+        for name in ("itemized_results.json", "itemized_results_0.json"):
+            p = os.path.join(root, name)
+            if os.path.exists(p):
+                return load_json_resilient(p) or {}
+        return {}
+
+    itemized          = _load_itemized(compare_root)
+    baseline_itemized = _load_itemized(baseline_root)
 
     correlation_data: Dict[str, Any] = {}
     for pid in pids:
@@ -1583,20 +1729,22 @@ def run_question_type(cfg: DictConfig) -> None:
             "improvement":        compare_pass - baseline_pass,
         }
 
-    corr_out = os.path.join(out_dir, "question_type_correlation.json")
+    corr_out = os.path.join(out_dir, f"question_type_correlation_{tag}.json")
     save_json_atomic(corr_out, correlation_data)
 
     # Plots
-    _plot_qtype_distribution(baseline_name, compare_name, baseline_dist, compare_dist, out_dir)
-    _plot_qtype_outcome(correlation_data, out_dir)
+    _plot_qtype_distribution(baseline_name, compare_name, baseline_dist, compare_dist, out_dir, tag)
+    _plot_qtype_outcome(correlation_data, out_dir, tag)
 
     dt = timedelta(seconds=(time.perf_counter() - t0))
+    logger.info(f"[QuestionType] tag={tag}")
     logger.info(f"[QuestionType] Saved raw  → {raw_out}")
     logger.info(f"[QuestionType] Saved dist → {dist_out}")
     logger.info(f"[QuestionType] Saved corr → {corr_out}")
     logger.info(f"[QuestionType] Elapsed: {dt}")
 
-    client.shutdown()
+    if "client" in dir():
+        client.shutdown()
 
 
 # -------------------- Main --------------------
