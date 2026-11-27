@@ -169,6 +169,32 @@ def _per_turn_bootstrap(
     return out
 
 
+def _mean_across_turns(
+    values: np.ndarray,                 # [N, T] float or np.nan
+    mask: Optional[np.ndarray] = None,  # [N, T] bool/0-1; if None use all
+    num_samples: int = 10_000,
+    seed: int = 42
+) -> Dict[str, Any]:
+    """
+    Collapse an [N, T] score matrix to a single mean(std) across turns.
+
+    mean: average of the per-turn means (every turn weighted equally).
+    std : average of the per-turn bootstrap standard deviations.
+
+    This is the statistic reported as mean(std) in the paper's teacher-leakage table.
+    """
+    per_turn = _per_turn_bootstrap(values, mask=mask, num_samples=num_samples, seed=seed)
+    used = [m for m in per_turn if m["mean"] is not None]
+    if not used:
+        return {"mean": None, "std": None, "n_turns": 0, "n_scores": 0}
+    return {
+        "mean": float(np.mean([m["mean"] for m in used])),
+        "std": float(np.mean([m["std"] for m in used])),
+        "n_turns": len(used),
+        "n_scores": int(sum(m["n"] for m in used)),
+    }
+
+
 def bootstrap_similarity_matrix(
     mats: np.ndarray,       # shape [N, T, T] similarity per problem
     mask: np.ndarray=None,  # optional [N, T] row-wise (compare-turn) mask; 1=use row i for this problem
@@ -1309,33 +1335,32 @@ def run_leakage(cfg: DictConfig) -> None:
             if isinstance(leak, (int, float)):
                 vals[i, idx] = float(leak)
 
-    # --- get improvement mask ---
+    # --- mean across teacher turns, improved-only subset ---
     if baseline_name != compare_name:
         mask = get_improvement_matrix(pids, baseline_root, compare_root, k=k_use).astype(bool)
         mask = _align_mask(mask, max_T)
 
-        per_turn_imp = _per_turn_bootstrap(vals, mask=mask)
-        aul_imp = sum(m["mean"] for m in per_turn_imp if m["mean"] is not None)
+        improved = _mean_across_turns(vals, mask=mask)
 
         improved_out = os.path.join(out_dir, "leakage_improved_only.json")
-        save_json_atomic(improved_out, {"per_turn": per_turn_imp, "AUL": aul_imp})
+        save_json_atomic(improved_out, improved)
 
-    # --- bootstrap per turn (overall) ---
-    per_turn_all = _per_turn_bootstrap(vals)
-    aul_all = sum(m["mean"] for m in per_turn_all if m["mean"] is not None)
+    # --- mean across teacher turns, all problems ---
+    overall = _mean_across_turns(vals)
 
     overall_out = os.path.join(out_dir, "leakage_overall.json")
-    save_json_atomic(overall_out, {"per_turn": per_turn_all, "AUL": aul_all})
+    save_json_atomic(overall_out, overall)
+    logger.info(f"[Leakage] mean across turns = {overall['mean']} (std {overall['std']})")
 
     combined = {
         "compare": compare_name,
         "baseline": baseline_name,
         "dataset": dataset,
         "judge_model": judge_model_name,
-        "overall": {"AUL": aul_all, "per_turn": per_turn_all},
+        "overall": overall,
     }
     if baseline_name != compare_name:
-        combined["improved_only"] = {"AUL": aul_imp, "per_turn": per_turn_imp}
+        combined["improved_only"] = improved
 
     combined_out = os.path.join(out_dir, "leakage_aggregate.json")
     save_json_atomic(combined_out, combined)
