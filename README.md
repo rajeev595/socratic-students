@@ -25,6 +25,7 @@ measure whether the student can now solve the problem (Pass@k). This repository 
 - [Configuration](#configuration)
 - [Implementation notes](#implementation-notes)
 - [Repository layout](#repository-layout)
+- [License](#license)
 - [Citation](#citation)
 
 ## Installation
@@ -120,7 +121,7 @@ The full paper is four runs of the pipeline: `STUDENT` in {`qwen7`, `mistral7`} 
 ```bash
 export STUDENT=qwen7 DOMAIN=math
 
-bash scripts/1_curate_data.sh            # problems the teacher solves and the student does not
+bash scripts/1_curate_data.sh            # rebuild the paper's problem sets from problem_ids/
 bash scripts/2_prompting_strategies.sh   # Unscaffolded, Scaffolded, Pre-/Mid-Assessment   (RQ1, RQ2)
 SOURCE=self bash scripts/3_odqs.sh       # Self-ODQS: collect preferences, train, evaluate (RQ3)
 SOURCE=peer bash scripts/3_odqs.sh       # Peer-ODQS
@@ -132,7 +133,18 @@ bash scripts/7_figures.sh                # all figures and significance tables (
 
 Interaction, data-collection and training runs save their progress and resume where they stopped if you run them again.
 
-### Step 1: curate the problem sets
+### Step 1: problem sets
+
+The exact problem sets of the paper are released as ordered lists of problem ids in
+[`problem_ids/`](problem_ids/). Rebuild the full problem files from the source datasets with:
+
+```bash
+python -m codes.data.build_splits        # writes data/qwen72/<dataset>/splits_0.5/<student>_{train,val,test}.json
+```
+
+This needs no GPU and gives the same train / val / test problems, in the same order, as used in the paper.
+
+To curate problem sets yourself (a different student or teacher, or from scratch):
 
 ```bash
 python -m codes.data.math.sample_hard student.model=qwen7 data.type=math experiment.dataset=gsm8k
@@ -142,9 +154,9 @@ python -m codes.data.code.sample_hard student.model=qwen7 data.type=code experim
 A problem is kept if the teacher solves it and the student does not (static Pass@5 < 0.5 over samples
 at temperature 0.3). Math problems come from GSM8K (`openai/gsm8k`, train split); code problems from
 HumanEval (`openai_humaneval`) and OpenCoder (`OpenCoder-LLM/opc-sft-stage2`, `educational_instruct`).
-The kept problems are split 50 / 20 / 30 into train / val / test and written to
-`data/<teacher>/<dataset>/splits_0.5/<student>_{train,val,test}.json`. ODQS data is collected on the
-train and val splits; everything reported in the paper is measured on the test split.
+The kept problems are shuffled and split 50 / 20 / 30 into train / val / test, so curating again
+gives a different set from the released one. ODQS data is collected on the train and val splits;
+everything reported in the paper is measured on the test split.
 
 ### Step 2: prompt-based strategies
 
@@ -300,6 +312,7 @@ Details of what the code does, for anyone comparing against the paper's descript
 
 ```
 configs/config.yaml               all settings
+problem_ids/                      ids of the problems in every train / val / test split used in the paper
 scripts/                          one script per pipeline stage (see above)
 codes/
   run_interact.py                 student-teacher interaction with per-turn evaluation
@@ -311,6 +324,7 @@ codes/
   plot_cross_eval.py, plot_qtype.py
   significance.py                 paired-bootstrap significance tests
   data/
+    build_splits.py               rebuild the paper's problem sets from problem_ids/
     math/sample_hard.py           curate GSM8K problems
     code/sample_hard.py           curate HumanEval + OpenCoder problems
     collect_self_odqs.py          Self-ODQS preference collection
@@ -327,6 +341,11 @@ codes/
 candidate groups (`train_grpo.py`) and a data collector that scores questions by a short look-ahead
 rollout (`collect_self_odqs_rollout.py`). They are kept for anyone who wants to build on them, but
 they are not maintained and are not needed for any result in the paper.
+
+## License
+
+The code is released under the [MIT License](LICENSE). The problems come from GSM8K, HumanEval and
+OpenCoder, which are released under the MIT License by their authors.
 
 ## Citation
 
