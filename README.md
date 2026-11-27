@@ -25,6 +25,7 @@ measure whether the student can now solve the problem (Pass@k). This repository 
 - [Configuration](#configuration)
 - [Implementation notes](#implementation-notes)
 - [Repository layout](#repository-layout)
+- [Acknowledgements](#acknowledgements)
 - [License](#license)
 - [Citation](#citation)
 
@@ -335,6 +336,10 @@ codes/
 candidate groups (`train_grpo.py`) and a data collector that scores questions by a short look-ahead
 rollout (`collect_self_odqs_rollout.py`). They are kept for anyone who wants to build on them, but
 they are not maintained and are not needed for any result in the paper.
+
+## Acknowledgements
+
+Claude Code (Anthropic) was used as a coding assistant for parts of the development of this codebase.
 
 ## License
 
