@@ -1,0 +1,16 @@
+# outputs
+data/
+experiments/
+jobs/
+*.out
+*.log
+
+# python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# editors / OS
+.vscode/
+.idea/
+.DS_Store

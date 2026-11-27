@@ -1,19 +1,27 @@
-# Core
-openai
-datasets
-tqdm
-hydra-core
-omegaconf
-vllm
-accelerate
-peft
-trl
-bitsandbytes
-tensorboard
-flash-attn
+# Tested with Python 3.13 and the versions below (CUDA 12.8). Newer versions are likely to work.
 
-# App / plotting
-streamlit
-altair
-pandas
-numpy
+# Serving and training
+vllm==0.11.0            # OpenAI-compatible local model servers (pulls in a matching torch)
+torch==2.8.0
+transformers==4.57.1
+accelerate==1.11.0
+peft==0.17.1
+trl==0.24.0
+bitsandbytes==0.48.1
+datasets==4.3.0
+sentence-transformers==5.1.2
+
+# Pipeline
+openai==2.6.0
+hydra-core==1.3.2
+omegaconf==2.3.0
+tenacity
+tiktoken==0.12.0
+requests
+tqdm
+tensorboard
+
+# Analysis and plotting (figures use LaTeX text rendering: install a TeX distribution)
+numpy==2.2.6
+scikit-learn
+matplotlib==3.10.7
