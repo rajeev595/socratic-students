@@ -32,9 +32,9 @@ import re
 from typing import List, Dict, Any, Tuple
 from openai import OpenAI
 
-from codes.utils.llm.chat import chat_complete
-from codes.data.utils import extract_math_response
-from codes.prompts.math import MATH_GENERATION_PROMPT
+from src.utils.llm.chat import chat_complete
+from src.utils.messages import extract_math_response
+from src.prompts.math import MATH_GENERATION_PROMPT
 
 
 # ---------------------------

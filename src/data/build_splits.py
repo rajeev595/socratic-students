@@ -13,7 +13,7 @@ Ids:
                   "opc/<seq_id>"  = seq_id in `OpenCoder-LLM/opc-sft-stage2` (config `educational_instruct`)
 
 Usage:
-    python -m codes.data.build_splits [--data ./data] [--teacher qwen72] [--students qwen7 mistral7]
+    python -m src.data.build_splits [--data ./data] [--teacher qwen72] [--students qwen7 mistral7]
 """
 
 from __future__ import annotations
@@ -26,8 +26,8 @@ from typing import Any, Callable, Dict, List
 
 from datasets import load_dataset
 
-from codes.data.code.sample_hard import organize_humaneval_problem, organize_opc_problem
-from codes.data.math.sample_hard import organize_gsm_row
+from src.data.curate_code import organize_humaneval_problem, organize_opc_problem
+from src.data.curate_math import organize_gsm_row
 
 IDS_ROOT = Path(__file__).resolve().parents[2] / "problem_ids"
 

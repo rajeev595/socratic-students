@@ -4,10 +4,10 @@ EXPERIMENTAL -- not used in the paper and not maintained.
 Group-relative policy optimisation over the scored candidate groups (*_grpo_iter0_*.jsonl) written by
 the ODQS collectors, as an alternative to DPO on preference pairs. It was explored early in the
 project and has not been run since; expect to debug it. The method reported in the paper is
-codes.run_sft_dpo.
+src.train_odqs.
 
 Usage:
-    accelerate launch -m codes.experimental.train_grpo student.model=qwen7 data.type=math \
+    accelerate launch -m src.experimental.train_grpo student.model=qwen7 data.type=math \
         experiment.dataset=gsm8k data.name=odqs data.source=self experiment.name=self_odqs_grpo
 """
 
@@ -29,8 +29,8 @@ from transformers.trainer_utils import get_last_checkpoint
 
 from trl import SFTTrainer, SFTConfig
 
-from codes.utils.vars import set_envs, hf_cache_dir
-from codes.utils.llm.server import _MODEL_ALIASES
+from src.utils.env import set_envs, hf_cache_dir
+from src.utils.llm.server import _MODEL_ALIASES
 
 logger = logging.getLogger(__name__)
 

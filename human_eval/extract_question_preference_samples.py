@@ -15,9 +15,9 @@ Outputs (all under --out_dir):
   - preference_samples_{student}_{dataset}.csv    -- for Amazon Mechanical Turk upload (ASCII-safe)
 
 Usage:
-  python -m codes.human_eval.extract_question_preference_samples \
+  python -m human_eval.extract_question_preference_samples \
       --task math   --student mistral7 [--n_problems 50] [--seed 42] [--out_dir experiments/human_eval/data]
-  python -m codes.human_eval.extract_question_preference_samples \
+  python -m human_eval.extract_question_preference_samples \
       --task coding --student mistral7 [--n_problems 50] [--seed 42] [--out_dir experiments/human_eval/data]
 """
 

@@ -1,8 +1,8 @@
 # Socratic Students -- default configuration (Hydra).
 # Every key can be overridden on the command line, e.g.
-#   python -m codes.run_interact student.model=mistral7 experiment.name=scaffolded experiment.scaffolded=True
+#   python -m src.interact student.model=mistral7 experiment.name=scaffolded experiment.scaffolded=True
 #
-# Model names are either a nickname from codes/utils/llm/server.py (_MODEL_ALIASES)
+# Model names are either a nickname from src/utils/llm/server.py (_MODEL_ALIASES)
 # or a full Hugging Face model id.
 
 paths:
@@ -42,7 +42,7 @@ judge:                            # LLM judge for the analyses and for Rejection
   server: "vllm"
   gpus: [4,5,6,7]
 
-evaluator:                        # solver used by codes.run_cross_eval (generator-vs-solver ablation)
+evaluator:                        # solver used by src.cross_eval (generator-vs-solver ablation)
   model: qwen7
   temperature: 0.3
   server: "vllm"
@@ -81,7 +81,7 @@ gen:
   dpo_margin_max: 1.0
   dpo_max_pairs_per_turn:         # optional cap on pairs per turn; empty = no cap
 
-  # experimental (codes/experimental/collect_self_odqs_rollout.py), not used in the paper
+  # experimental (src/experimental/collect_self_odqs_rollout.py), not used in the paper
   rollout_horizon: 3
   rollout_gamma: 0.9
   sft_gate_min: 0.85
@@ -110,7 +110,7 @@ train:
   sft_eval_steps: 25
   gpus: [0,1,2,3,4,5,6,7]
 
-  # experimental (codes/experimental/train_grpo.py), not used in the paper
+  # experimental (src/experimental/train_grpo.py), not used in the paper
   sft_use_4bit: True
   grpo_use_4bit: True
   grpo_batch_size_groups: 1
@@ -139,14 +139,11 @@ experiment:
   chunk_size: 256                 # results are checkpointed after every chunk
 
 # ---------------------------------------------------------------------------
-# Analysis (codes.run_analysis)
+# Analysis (src.analysis.progress | similarity | leakage | question_types)
 # ---------------------------------------------------------------------------
 analysis:
-  task: question_type             # progress | similarity_embedding | similarity_judge | similarity_rank | leakage | question_type
-  baseline: unscaffolded          # experiment name of the baseline condition
   compare: scaffolded             # experiment name of the condition being analysed
-  model: Qwen/Qwen3-Embedding-0.6B  # sentence-embedding model for similarity_embedding
-  batch_size: 16
+  baseline: unscaffolded          # experiment name of the condition it is compared with
   k: 5                            # Pass@k used to decide which problems "improved"
 
 hydra:

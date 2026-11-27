@@ -17,7 +17,7 @@ Outputs:
   - Summary JSON saved to same dir as --scores
 
 Usage:
-  python -m codes.human_eval.analyze_preference_results \
+  python -m human_eval.analyze_preference_results \
       --scores  experiments/human_eval/data/scores_amt_preference_samples_qwen7_gsm8k.csv \
       --samples experiments/human_eval/data/preference_samples_qwen7_gsm8k.jsonl
 """

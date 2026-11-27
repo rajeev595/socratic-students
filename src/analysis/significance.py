@@ -14,7 +14,7 @@ Reads  <experiments>/<experiment>/<teacher>/<student>/<dataset>/itemized_results
 Writes <experiments>/plots/significance.json and prints the tables.
 
 Usage:
-    python -m codes.significance [--experiments ./experiments] [--students qwen7 mistral7]
+    python -m src.analysis.significance [--experiments ./experiments] [--students qwen7 mistral7]
 """
 
 from __future__ import annotations
@@ -22,11 +22,11 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, Iterable, List
 
 import numpy as np
 
-from codes.plot_results import BEST_ASSESSMENT, DATASETS, STUDENTS, TEACHERS, TURNS, experiment_folder, find_results
+from src.plots.results import BEST_ASSESSMENT, DATASETS, STUDENTS, TEACHERS, TURNS, experiment_folder, find_results
 
 
 def paired_bootstrap_test(

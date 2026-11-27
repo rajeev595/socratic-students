@@ -25,12 +25,12 @@ from omegaconf import DictConfig
 from openai import OpenAI
 from tqdm import tqdm
 
-from codes.evaluation.math import generate_math_completions, evaluate_math_completion
-from codes.evaluation.utils import compute_pass_at_k
-from codes.utils.llm.server import build_client
-from codes.utils.vars import set_envs
-from codes.data.code.sample_hard import count_examples, save_train_test_val_split
-from codes.utils.file_ops import save_json_atomic, load_json_resilient
+from src.evaluation.math import generate_math_completions, evaluate_math_completion
+from src.evaluation.pass_at_k import compute_pass_at_k
+from src.utils.llm.server import build_client
+from src.utils.env import set_envs
+from src.data.curate_code import count_examples, save_train_test_val_split
+from src.utils.io import save_json_atomic, load_json_resilient
 
 
 # ---------------------------------------------------------------------
@@ -176,7 +176,7 @@ def process_problem(
 # Hydra entry
 # =========================
 
-@hydra.main(version_base=None, config_path="../../../configs", config_name="config.yaml")
+@hydra.main(version_base=None, config_path="../../configs", config_name="config.yaml")
 def main(cfg: DictConfig) -> None:
     """
     Hydra entrypoint to curate GSM-style math problems.

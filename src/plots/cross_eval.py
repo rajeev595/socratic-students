@@ -14,7 +14,7 @@ The Qgen and Solver runs include an assessment (Pre for math, Mid for code). Wit
 Output: <experiments>/plots/cross_eval/cross_eval_ablation.pdf (+ one PDF per panel)
 
 Usage:
-    python -m codes.plot_cross_eval [--experiments ./experiments]
+    python -m src.plots.cross_eval [--experiments ./experiments]
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-# ── Style (matches plot_results_rqs.py) ──────────────────────────────────────
+# ── Style (matches src/plots/results.py) ──────────────────────────────────────
 
 plt.rcParams.update({
     "text.usetex": True,
@@ -65,7 +65,7 @@ LORA_SUFFIX = "_odqs"   # LoRA name used for the trained student: <student>_odqs
 # ── Data loading ──────────────────────────────────────────────────────────────
 
 def _find(exp_dir: Path) -> Path:
-    """codes.run_interact writes aggregate_results_0.json; codes.run_cross_eval writes aggregate_results.json."""
+    """src.interact writes aggregate_results_0.json; src.cross_eval writes aggregate_results.json."""
     for fname in ("aggregate_results_0.json", "aggregate_results.json"):
         if (exp_dir / fname).exists():
             return exp_dir / fname
@@ -85,7 +85,7 @@ def condition_paths(base: Path, model: str, task: str, matched: bool = False) ->
     """
     Result files of the four generator x solver conditions for one (student, task).
 
-    The Qgen/Solver runs (codes.run_cross_eval) include an assessment (Pre for math, Mid for code).
+    The Qgen/Solver runs (src.cross_eval) include an assessment (Pre for math, Mid for code).
     matched=False  Frozen/Full are the plain runs without assessment (unscaffolded, self_odqs).
     matched=True   Frozen/Full are the runs with the same assessment
                    (assessment_turn_<t>, self_odqs_assessment_turn_<t>).

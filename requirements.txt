@@ -9,7 +9,6 @@ peft==0.17.1
 trl==0.24.0
 bitsandbytes==0.48.1
 datasets==4.3.0
-sentence-transformers==5.1.2
 
 # Pipeline
 openai==2.6.0
@@ -23,5 +22,4 @@ tensorboard
 
 # Analysis and plotting (figures use LaTeX text rendering: install a TeX distribution)
 numpy==2.2.6
-scikit-learn
 matplotlib==3.10.7

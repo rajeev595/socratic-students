@@ -13,8 +13,8 @@ from datasets import load_dataset
 from transformers import AutoTokenizer, AutoModelForCausalLM, GenerationConfig
 from transformers.trainer_utils import get_last_checkpoint
 
-from codes.utils.vars import set_envs, hf_cache_dir
-from codes.utils.llm.server import _MODEL_ALIASES
+from src.utils.env import set_envs, hf_cache_dir
+from src.utils.llm.server import _MODEL_ALIASES
 
 
 logger = logging.getLogger(__name__)

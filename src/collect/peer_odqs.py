@@ -1,7 +1,7 @@
 """
 Peer-ODQS data collection.
 
-Same procedure as codes.data.collect_self_odqs, but the candidate pool at every turn contains
+Same procedure as src.collect.self_odqs, but the candidate pool at every turn contains
 `gen.num_candidates` questions from the student and `gen.num_candidates` questions from a
 stronger peer model (`peer.model`). Every record stores which model wrote the chosen question
 ("source": "student" | "peer").
@@ -10,7 +10,7 @@ Output (under <data>/<teacher>/<dataset>/<data.name>/):
   <student>__<peer>__{sft,dpo,grpo}_iter0_<split>.jsonl
 
 Usage:
-    python -m codes.data.collect_peer_odqs student.model=qwen7 peer.model=qwen30 data.type=math \
+    python -m src.collect.peer_odqs student.model=qwen7 peer.model=qwen30 data.type=math \
         experiment.dataset=gsm8k data.name=odqs data.split=train data.data_amount=1000 experiment.name=peer_odqs
 """
 
@@ -30,12 +30,12 @@ from openai import OpenAI
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from codes.data.utils import format_messages, msgs_to_string
-from codes.prompts.utils import _select_sys_prompt, _problem_greeting
-from codes.run_interact import interact, evaluate, get_assessment
-from codes.utils.llm.server import build_client
-from codes.utils.vars import set_envs
-from codes.utils.file_ops import load_json_resilient
+from src.utils.messages import format_messages, msgs_to_string
+from src.prompts.select import _select_sys_prompt, _problem_greeting
+from src.interact import interact, evaluate, get_assessment
+from src.utils.llm.server import build_client
+from src.utils.env import set_envs
+from src.utils.io import load_json_resilient
 
 
 logger = logging.getLogger(__name__)

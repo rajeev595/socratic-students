@@ -1,7 +1,7 @@
 # Socratic Students: Training Language Models to Ask Better Questions for Reasoning
 
 Code for the paper **"Socratic Students: Training Language Models to Ask Better Questions for Reasoning"**
-(Rajeev Bhatt Ambati\*, Tianyi Niu\*, Aashu Singh, Shlok Mishra, Snigdha Chaturvedi, Shashank Srivastava; Findings of EACL).
+(Rajeev Bhatt Ambati\*, Tianyi Niu\*, Aashu Singh, Shlok Mishra, Snigdha Chaturvedi, Shashank Srivastava; Findings of EACL 2027).
 
 A *student* model works on a math or coding problem and may ask a stronger *teacher* model a small
 number of questions. The teacher gives guidance but not the answer. After every teacher reply we
@@ -60,14 +60,14 @@ command line. All commands are run from the repository root.
 | Scaffolded | `experiment.scaffolded=True` |
 | Pre-Assessment | `experiment.assessment_turn=0` |
 | Mid-Assessment | `experiment.assessment_turn=2` |
-| Self-ODQS | `codes.data.collect_self_odqs` then `codes.run_sft_dpo` with `data.source=self` |
-| Peer-ODQS | `codes.data.collect_peer_odqs` then `codes.run_sft_dpo` with `data.source=peer` |
-| Rejection Sampling | `codes.data.collect_rejection_sampling` then `codes.run_sft_dpo` |
+| Self-ODQS | `src.collect.self_odqs` then `src.train_odqs` with `data.source=self` |
+| Peer-ODQS | `src.collect.peer_odqs` then `src.train_odqs` with `data.source=peer` |
+| Rejection Sampling | `src.collect.rejection_sampling` then `src.train_odqs` |
 | Peer model | `peer.model` |
 | LLM judge | `judge.model` |
-| Question generator vs. solver | `student` (asks the questions) vs. `evaluator` (answers the problem) in `codes.run_cross_eval` |
+| Question generator vs. solver | `student` (asks the questions) vs. `evaluator` (answers the problem) in `src.cross_eval` |
 
-Models used in the paper, by their nickname in `codes/utils/llm/server.py`:
+Models used in the paper, by their nickname in `src/utils/llm/server.py`:
 
 | Role | Nickname | Model |
 |---|---|---|
@@ -134,7 +134,7 @@ The exact problem sets of the paper are released as ordered lists of problem ids
 [`problem_ids/`](problem_ids/). Rebuild the full problem files from the source datasets with:
 
 ```bash
-python -m codes.data.build_splits        # writes data/qwen72/<dataset>/splits_0.5/<student>_{train,val,test}.json
+python -m src.data.build_splits        # writes data/qwen72/<dataset>/splits_0.5/<student>_{train,val,test}.json
 ```
 
 This needs no GPU and gives the same train / val / test problems, in the same order, as used in the paper.
@@ -142,8 +142,8 @@ This needs no GPU and gives the same train / val / test problems, in the same or
 To curate problem sets yourself (a different student or teacher, or from scratch):
 
 ```bash
-python -m codes.data.math.sample_hard student.model=qwen7 data.type=math experiment.dataset=gsm8k
-python -m codes.data.code.sample_hard student.model=qwen7 data.type=code experiment.dataset=humaneval_opc
+python -m src.data.curate_math student.model=qwen7 data.type=math experiment.dataset=gsm8k
+python -m src.data.curate_code student.model=qwen7 data.type=code experiment.dataset=humaneval_opc
 ```
 
 A problem is kept if the teacher solves it and the student does not (static Pass@5 < 0.5 over samples
@@ -158,10 +158,10 @@ everything reported in the paper is measured on the test split.
 ```bash
 C="student.model=qwen7 data.type=math experiment.dataset=gsm8k data.split=test data.data_amount=1000"
 
-python -m codes.run_interact $C experiment.name=unscaffolded
-python -m codes.run_interact $C experiment.name=scaffolded     experiment.scaffolded=True
-python -m codes.run_interact $C experiment.name=pre_assessment experiment.scaffolded=True experiment.assessment_turn=0
-python -m codes.run_interact $C experiment.name=mid_assessment experiment.scaffolded=True experiment.assessment_turn=2
+python -m src.interact $C experiment.name=unscaffolded
+python -m src.interact $C experiment.name=scaffolded     experiment.scaffolded=True
+python -m src.interact $C experiment.name=pre_assessment experiment.scaffolded=True experiment.assessment_turn=0
+python -m src.interact $C experiment.name=mid_assessment experiment.scaffolded=True experiment.assessment_turn=2
 ```
 
 ### Step 3: ODQS
@@ -170,21 +170,21 @@ python -m codes.run_interact $C experiment.name=mid_assessment experiment.scaffo
 C="student.model=qwen7 data.type=math experiment.dataset=gsm8k data.name=odqs data.source=self"
 
 # (a) collect outcome-labelled question preferences
-python -m codes.data.collect_self_odqs $C experiment.name=self_odqs data.split=train data.data_amount=1000
-python -m codes.data.collect_self_odqs $C experiment.name=self_odqs data.split=val   data.data_amount=500
+python -m src.collect.self_odqs $C experiment.name=self_odqs data.split=train data.data_amount=1000
+python -m src.collect.self_odqs $C experiment.name=self_odqs data.split=val   data.data_amount=500
 
 # (b) train the student with DPO (LoRA)
-accelerate launch --multi_gpu --num_processes 8 -m codes.run_sft_dpo $C experiment.name=self_odqs
+accelerate launch --multi_gpu --num_processes 8 -m src.train_odqs $C experiment.name=self_odqs
 
 # (c) evaluate the trained student (Pre-Assessment for math; use assessment_turn=2 for code)
 CKPT=$(ls -d experiments/self_odqs/qwen72/qwen7/gsm8k/dpo_0/checkpoint-* | sort -V | head -n1)
-python -m codes.run_interact student.model=qwen7 data.type=math experiment.dataset=gsm8k \
+python -m src.interact student.model=qwen7 data.type=math experiment.dataset=gsm8k \
     data.split=test data.data_amount=1000 \
     student.lora.name=qwen7_odqs student.lora.path=$CKPT \
     experiment.name=self_odqs_pre_assessment experiment.scaffolded=True experiment.assessment_turn=0
 ```
 
-For Peer-ODQS use `codes.data.collect_peer_odqs`, `data.source=peer` and `experiment.name=peer_odqs`.
+For Peer-ODQS use `src.collect.peer_odqs`, `data.source=peer` and `experiment.name=peer_odqs`.
 
 ### Steps 4-7
 
@@ -196,43 +196,42 @@ After the runs above, `bash scripts/7_figures.sh` writes everything under `exper
 
 | Paper | Command | Output |
 |---|---|---|
-| Fig. 2 (RQ1), Fig. 3 (RQ2), Fig. 4 (RQ3) | `python -m codes.plot_results` | `plots/results/*__k5__rq{1,2,3}.pdf` |
+| Fig. 2 (RQ1), Fig. 3 (RQ2), Fig. 4 (RQ3) | `python -m src.plots.results` | `plots/results/*__k5__rq{1,2,3}.pdf` |
 | Fig. 10, 11 (Pass@1, Pass@10) | same | `plots/results/*__k{1,10}__rq3.pdf` |
-| Tables 3-6 (turn-wise Pass@5) | `python -m codes.plot_results --tables` | printed |
-| Tables 7-9 (significance) | `python -m codes.significance` | printed, `plots/significance.json` |
+| Tables 3-6 (turn-wise Pass@5) | `python -m src.plots.results --tables` | printed |
+| Tables 7-9 (significance) | `python -m src.analysis.significance` | printed, `plots/significance.json` |
 | Table 2 (preference data sizes) | `wc -l data/qwen72/*/odqs/*_dpo_iter0_train.jsonl` | printed |
-| Fig. 5 (progress) | `analysis.task=progress`, then `python -m codes.plot_ablations progress` | `plots/ablations/*__progress.pdf` |
-| Fig. 6 (question similarity) | `analysis.task=similarity_judge` | `<experiment>/analysis/similarity_judge_*_overall.png` |
-| Fig. 7 (assessment position) | `python -m codes.plot_ablations assessment-position` | `plots/ablations/*__assessment_position.pdf` |
-| Fig. 8 (generator vs. solver) | `python -m codes.plot_cross_eval` | `plots/cross_eval/` |
-| Fig. 9 (question types) | `analysis.task=question_type`, then `python -m codes.plot_qtype` | `<experiment>/analysis/question_type_distribution_*.pdf` |
-| Fig. 12 (teacher size) | `RUN_TEACHER_SIZE=1 bash scripts/5_ablations.sh`, then `python -m codes.plot_ablations teacher-size` | `plots/ablations/*__teacher_size.pdf` |
-| Table 10 (teacher leakage) | `analysis.task=leakage` | `<experiment>/analysis/leakage_aggregate.json` (`overall.mean`, `overall.std`) |
-| Table 11 (human leakage ratings) | `codes.human_eval.extract_leakage_samples`, `codes.human_eval.analyze_leakage_results` | printed, JSON |
-| Table 12 (human question preference) | `codes.human_eval.extract_question_preference_samples`, `codes.human_eval.analyze_preference_results` | printed, JSON |
+| Fig. 5 (progress) | `python -m src.analysis.progress ...`, then `python -m src.plots.ablations progress` | `plots/ablations/*__progress.pdf` |
+| Fig. 6 (question similarity) | `python -m src.analysis.similarity ...` | `<experiment>/analysis/similarity_judge_*_overall.png` |
+| Fig. 7 (assessment position) | `python -m src.plots.ablations assessment-position` | `plots/ablations/*__assessment_position.pdf` |
+| Fig. 8 (generator vs. solver) | `python -m src.plots.cross_eval` | `plots/cross_eval/` |
+| Fig. 9 (question types) | `python -m src.analysis.question_types ...` (redraw with `python -m src.plots.question_types`) | `<experiment>/analysis/question_type_distribution_*.pdf` |
+| Fig. 12 (teacher size) | `RUN_TEACHER_SIZE=1 bash scripts/5_ablations.sh`, then `python -m src.plots.ablations teacher-size` | `plots/ablations/*__teacher_size.pdf` |
+| Table 10 (teacher leakage) | `python -m src.analysis.leakage ...` | `<experiment>/analysis/leakage_aggregate.json` (`overall.mean`, `overall.std`) |
+| Table 11 (human leakage ratings) | `python -m human_eval.extract_leakage_samples`, `python -m human_eval.analyze_leakage_results` | printed, JSON |
+| Table 12 (human question preference) | `python -m human_eval.extract_question_preference_samples`, `python -m human_eval.analyze_preference_results` | printed, JSON |
 
-The analyses are run with `codes.run_analysis`, one task at a time:
+Each LLM-judge analysis is its own module under `src/analysis/`:
 
 ```bash
-python -m codes.run_analysis student.model=qwen7 data.type=math experiment.dataset=gsm8k data.split=test data.data_amount=1000 \
-    analysis.task=leakage judge.model=llama70 \
-    experiment.name=self_odqs_pre_assessment analysis.compare=self_odqs_pre_assessment analysis.baseline=self_odqs_pre_assessment
+python -m src.analysis.leakage student.model=qwen7 data.type=math experiment.dataset=gsm8k data.split=test data.data_amount=1000 \
+    judge.model=llama70 \
+    analysis.compare=self_odqs_pre_assessment analysis.baseline=self_odqs_pre_assessment
 ```
 
-| `analysis.task` | What it measures | Judge in the paper |
+| Module | What it measures | Judge in the paper |
 |---|---|---|
-| `progress` | how far the student's reasoning has progressed at each turn (0-1) | Qwen2.5-72B |
-| `similarity_judge` | similarity between the questions of `analysis.compare` and `analysis.baseline`, for every pair of turns | Qwen2.5-72B |
-| `similarity_embedding`, `similarity_rank` | the same with sentence embeddings / a ranking judge (not in the paper) | - |
-| `leakage` | how much of the answer each teacher reply reveals (0-1), reported as the mean across turns | Llama-3.3-70B |
-| `question_type` | Unfocused / Conceptual / Hypothesis / Grounded label for every student message | Llama-3.3-70B |
+| `src.analysis.progress` | how far the student's reasoning has progressed at each turn (0-1) | Qwen2.5-72B |
+| `src.analysis.similarity` | similarity between the questions of `analysis.compare` and `analysis.baseline`, for every pair of turns | Qwen2.5-72B |
+| `src.analysis.leakage` | how much of the answer each teacher reply reveals (0-1), reported as the mean across turns | Llama-3.3-70B |
+| `src.analysis.question_types` | Unfocused / Conceptual / Hypothesis / Grounded label for every student message | Llama-3.3-70B |
 
 `analysis.compare` is the experiment being analysed and `analysis.baseline` the one it is compared
 with (set both to the same name for `progress` and `leakage`). Results go to
 `experiments/<analysis.compare>/<teacher>/<student>/<dataset>/analysis/`.
 
-**Human evaluation.** `codes/human_eval/` contains the scripts that sample items for the two Amazon
-Mechanical Turk studies, the HIT templates shown to workers (`hit_template_*.html`), and the scripts
+**Human evaluation.** `human_eval/` contains the scripts that sample items for the two Amazon
+Mechanical Turk studies, the HIT templates shown to workers (`human_eval/templates/`), and the scripts
 that compute agreement, correlations and win rates from the downloaded results.
 
 ## Outputs and file formats
@@ -249,7 +248,7 @@ experiments/<name>/<teacher>/<student>/<dataset>/
   itemized_results_0.json                        # {problem id: {results: {turn: {k: Pass@k}}, generations: ...}}
   aggregate_results_0.json                       # {turn: {k: [bootstrapped mean, std]}}
   dpo_0/checkpoint-*/                            # LoRA checkpoints (training runs only)
-  analysis/                                      # outputs of codes.run_analysis
+  analysis/                                      # outputs of the src.analysis modules
   *.log, config.yaml, overrides.yaml             # Hydra logs and the exact configuration of the last run
 ```
 
@@ -309,30 +308,42 @@ Details of what the code does, for anyone comparing against the paper's descript
 configs/config.yaml               # all settings
 problem_ids/                      # ids of the problems in every train / val / test split used in the paper
 scripts/                          # one script per pipeline stage (see above)
-codes/
-  run_interact.py                 # student-teacher interaction with per-turn evaluation
-  run_sft_dpo.py                  # ODQS training (optional SFT, then DPO)
-  run_cross_eval.py               # generator-vs-solver ablation
-  run_analysis.py                 # LLM-judge analyses
-  plot_results.py                 # main result figures and tables
-  plot_ablations.py               # progress, assessment position, teacher size
-  plot_cross_eval.py, plot_qtype.py
-  significance.py                 # paired-bootstrap significance tests
+src/
+  interact.py                     # student-teacher interaction with per-turn evaluation
+  train_odqs.py                   # ODQS training (optional SFT, then DPO)
+  cross_eval.py                   # generator-vs-solver ablation
   data/
     build_splits.py               # rebuild the paper's problem sets from problem_ids/
-    math/sample_hard.py           # curate GSM8K problems
-    code/sample_hard.py           # curate HumanEval + OpenCoder problems
-    collect_self_odqs.py          # Self-ODQS preference collection
-    collect_peer_odqs.py          # Peer-ODQS preference collection
-    collect_rejection_sampling.py LLM-judge baseline data
+    curate_math.py                # curate GSM8K problems
+    curate_code.py                # curate HumanEval + OpenCoder problems
+  collect/
+    self_odqs.py                  # Self-ODQS preference collection
+    peer_odqs.py                  # Peer-ODQS preference collection
+    rejection_sampling.py         # LLM-judge baseline data
+  analysis/
+    progress.py                   # progress per turn (LLM judge)
+    similarity.py                 # question similarity between two methods (LLM judge)
+    leakage.py                    # teacher answer leakage (LLM judge)
+    question_types.py             # question-type distribution (LLM judge)
+    significance.py               # paired-bootstrap significance tests
+    common.py                     # shared helpers
+  plots/
+    results.py                    # main result figures and tables
+    ablations.py                  # progress, assessment position, teacher size
+    cross_eval.py                 # generator vs. solver
+    question_types.py             # question-type distribution
   prompts/                        # every prompt used (student, teacher, assessment, judges)
   evaluation/                     # answer generation and checking, Pass@k, bootstrap
-  human_eval/                     # MTurk sampling, HIT templates, analysis
-  utils/                          # model servers, chat wrapper, file helpers
+  utils/
+    llm/                          # local model servers and the chat wrapper
+    io.py, env.py, messages.py    # file helpers, environment, message formatting
   experimental/                   # not used in the paper, see below
+human_eval/                       # the two Mechanical Turk studies
+  extract_*.py, analyze_*.py      # sample items; compute agreement, correlations, win rates
+  templates/                      # HIT templates shown to workers
 ```
 
-`codes/experimental/` holds two things we tried and did not use: a GRPO-style trainer over the scored
+`src/experimental/` holds two things we tried and did not use: a GRPO-style trainer over the scored
 candidate groups (`train_grpo.py`) and a data collector that scores questions by a short look-ahead
 rollout (`collect_self_odqs_rollout.py`). They are kept for anyone who wants to build on them, but
 they are not maintained and are not needed for any result in the paper.
@@ -349,10 +360,10 @@ OpenCoder, which are released under the MIT License by their authors.
 ## Citation
 
 ```bibtex
-@inproceedings{ambati-niu-socratic-students,
+@inproceedings{ambati2027socratic,
   title     = {Socratic Students: Training Language Models to Ask Better Questions for Reasoning},
   author    = {Ambati, Rajeev Bhatt and Niu, Tianyi and Singh, Aashu and Mishra, Shlok and Chaturvedi, Snigdha and Srivastava, Shashank},
-  booktitle = {Findings of the Association for Computational Linguistics: EACL},
-  note      = {To appear}
+  booktitle = {Findings of the Association for Computational Linguistics: EACL 2027},
+  year      = {2027}
 }
 ```

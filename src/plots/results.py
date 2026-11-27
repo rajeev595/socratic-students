@@ -10,8 +10,8 @@ Writes  <experiments>/plots/results/{dataset}__T-{teacher}__S-{student}__k{k}__{
         for k in {1, 5, 10} and rq in {rq1, rq2, rq3}
 
 Usage:
-    python -m codes.plot_results [--experiments ./experiments] [--students qwen7 mistral7]
-    python -m codes.plot_results --tables      # print turn-wise Pass@5 mean(std) for every method
+    python -m src.plots.results [--experiments ./experiments] [--students qwen7 mistral7]
+    python -m src.plots.results --tables      # print turn-wise Pass@5 mean(std) for every method
 """
 
 from __future__ import annotations
@@ -63,7 +63,7 @@ def experiment_folder(method: str, dataset: str) -> str:
 
 
 def find_results(exp_dir: Path, name: str = "aggregate_results") -> Optional[Path]:
-    """codes.run_interact writes <name>_0.json; codes.run_cross_eval writes <name>.json."""
+    """src.interact writes <name>_0.json; src.cross_eval writes <name>.json."""
     for fname in (f"{name}_0.json", f"{name}.json"):
         if (exp_dir / fname).exists():
             return exp_dir / fname

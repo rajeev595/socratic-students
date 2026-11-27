@@ -18,7 +18,7 @@ Output (under <experiments>/<experiment.name>/<teacher>/<student>/<dataset>/):
   aggregate_results_0.json          bootstrapped mean/std of Pass@k at every turn
 
 Usage:
-    python -m codes.run_interact student.model=qwen7 data.type=math experiment.dataset=gsm8k \
+    python -m src.interact student.model=qwen7 data.type=math experiment.dataset=gsm8k \
         experiment.name=scaffolded experiment.scaffolded=True
 """
 
@@ -35,15 +35,15 @@ from omegaconf import DictConfig
 
 from openai import OpenAI
 
-from codes.utils.llm.server import build_client
-from codes.utils.llm.chat import chat_complete
-from codes.utils.vars import set_envs
-from codes.data.utils import remove_think_tags, msgs_to_string, format_messages, transcript_messages
-from codes.prompts.utils import _select_sys_prompt, _problem_greeting
-from codes.evaluation.code import generate_code_completions, evaluate_code_completion, get_code_feedback_from_eval
-from codes.evaluation.math import generate_math_completions, evaluate_math_completion, get_math_feedback_from_eval
-from codes.evaluation.utils import compute_pass_at_k, bootstrap_aggregate
-from codes.utils.file_ops import save_json_atomic, load_json_resilient
+from src.utils.llm.server import build_client
+from src.utils.llm.chat import chat_complete
+from src.utils.env import set_envs
+from src.utils.messages import remove_think_tags, msgs_to_string, format_messages, transcript_messages
+from src.prompts.select import _select_sys_prompt, _problem_greeting
+from src.evaluation.code import generate_code_completions, evaluate_code_completion, get_code_feedback_from_eval
+from src.evaluation.math import generate_math_completions, evaluate_math_completion, get_math_feedback_from_eval
+from src.evaluation.pass_at_k import compute_pass_at_k, bootstrap_aggregate
+from src.utils.io import save_json_atomic, load_json_resilient
 
 
 logger = logging.getLogger(__name__)
@@ -197,13 +197,13 @@ def evaluate(
         )
         eval_func = lambda x, y : evaluate_math_completion(x, y, teacher_client, teacher_name, teacher_temperature)
 
-    # Evaluate completions in parallel
-    flags: List[bool] = []
+    # Evaluate completions in parallel (flags[i] is the result of completions[i])
+    flags: List[bool] = [False] * len(completions)
     with ThreadPoolExecutor(max_workers=4) as ex:
-        futures = [ex.submit(eval_func, comp, problem) for comp in completions]
+        futures = {ex.submit(eval_func, comp, problem): i for i, comp in enumerate(completions)}
         for fut in as_completed(futures):
             _, passed = fut.result()
-            flags.append(passed)
+            flags[futures[fut]] = passed
     
     pass_at_k_scores = compute_pass_at_k(flags, k_values)
     generations = [(c, f) for c, f in zip(completions, flags)]

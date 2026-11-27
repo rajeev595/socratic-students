@@ -4,7 +4,7 @@ Reads all question_type_dist_*.json and question_type_correlation_*.json files
 under the experiments root and saves updated PDFs next to them.
 
 Usage:
-    python -m codes.plot_qtype [--experiments ./experiments]
+    python -m src.plots.question_types [--experiments ./experiments]
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ plt.rcParams.update({
 TYPE_LABELS = ["A", "B", "C", "D"]
 
 # Human-readable names for the four student-question types (see the
-# judge_question_type_system_prompt in codes/prompts/{math,code}.py).
+# judge_question_type_system_prompt in src/prompts/{math,code}.py).
 TYPE_NAMES = {
     "A": "Unfocused",
     "B": "Conceptual",

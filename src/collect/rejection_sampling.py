@@ -1,7 +1,7 @@
 """
 Rejection Sampling data collection (baseline).
 
-Same candidate sampling as codes.data.collect_self_odqs, but the best candidate question at every
+Same candidate sampling as src.collect.self_odqs, but the best candidate question at every
 turn is picked by an LLM judge (the teacher model) instead of by the student's downstream Pass@k.
 
 Output (under <data>/<teacher>/<dataset>/<data.name>/):
@@ -9,7 +9,7 @@ Output (under <data>/<teacher>/<dataset>/<data.name>/):
   <student>_dpo_iter0_<split>.jsonl    (selected > rejected) preference pairs
 
 Usage:
-    python -m codes.data.collect_rejection_sampling student.model=qwen7 data.type=math experiment.dataset=gsm8k \
+    python -m src.collect.rejection_sampling student.model=qwen7 data.type=math experiment.dataset=gsm8k \
         data.name=rejection_sampling data.split=train data.data_amount=1000 experiment.name=rejection_sampling
 """
 
@@ -28,13 +28,13 @@ from openai import OpenAI
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from codes.data.utils import format_messages, msgs_to_string
-from codes.prompts.utils import _select_sys_prompt, _problem_greeting
-from codes.run_interact import interact
-from codes.utils.llm.server import build_client
-from codes.utils.llm.chat import chat_complete
-from codes.utils.vars import set_envs
-from codes.utils.file_ops import load_json_resilient
+from src.utils.messages import format_messages, msgs_to_string
+from src.prompts.select import _select_sys_prompt, _problem_greeting
+from src.interact import interact
+from src.utils.llm.server import build_client
+from src.utils.llm.chat import chat_complete
+from src.utils.env import set_envs
+from src.utils.io import load_json_resilient
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(

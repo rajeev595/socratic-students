@@ -14,7 +14,7 @@ Outputs:
   - Saves summary table as leakage_human_eval_results.json
 
 Usage:
-  python -m codes.human_eval.analyze_leakage_results \
+  python -m human_eval.analyze_leakage_results \
       --human_results experiments/human_eval/data/amt_results.csv \
       --samples experiments/human_eval/data/leakage_samples.jsonl
 """
@@ -103,7 +103,7 @@ def krippendorffs_alpha(ratings_by_item: dict, level="ordinal") -> float:
 
 def _bootstrap_mean_std(vals, n_boot=10_000, seed=42):
     """Bootstrap the mean; std is std of bootstrap means (standard error).
-    Matches the same approach used in run_analysis.py _bootstrap_mean_std."""
+    Same approach as _bootstrap_mean_std in src/analysis/common.py."""
     arr = np.array(vals, dtype=float)
     n = len(arr)
     if n == 0:
@@ -175,7 +175,7 @@ def main():
                         help="leakage_samples.jsonl with condition and item_id")
     parser.add_argument("--llm_scores", default=None,
                         help="JSON {item_id: llm_score} — if None, skips LLM correlation")
-    parser.add_argument("--out", default="codes/human_eval/data/leakage_human_eval_results.json")
+    parser.add_argument("--out", default="experiments/human_eval/data/leakage_human_eval_results.json")
     args = parser.parse_args()
 
     # Load sample metadata

@@ -18,7 +18,7 @@ Four conditions:
     No-Training     ODQS            does ODQS advantage come from the evaluator?
 
 Usage:
-    python codes/run_cross_eval.py \
+    python -m src.cross_eval \
         student.model=mistral7 \
         student.lora.name=mistral7_dpo \
         student.lora.path=/path/to/lora \
@@ -48,13 +48,13 @@ import hydra
 from omegaconf import DictConfig
 from tqdm import tqdm
 
-from codes.utils.llm.server import build_client
-from codes.utils.vars import set_envs
-from codes.data.utils import msgs_to_string, transcript_messages
-from codes.prompts.utils import _select_sys_prompt, _problem_greeting
-from codes.evaluation.utils import bootstrap_aggregate
-from codes.utils.file_ops import save_json_atomic, load_json_resilient
-from codes.run_interact import interact, evaluate   # reuse both directly
+from src.utils.llm.server import build_client
+from src.utils.env import set_envs
+from src.utils.messages import msgs_to_string, transcript_messages
+from src.prompts.select import _select_sys_prompt, _problem_greeting
+from src.evaluation.pass_at_k import bootstrap_aggregate
+from src.utils.io import save_json_atomic, load_json_resilient
+from src.interact import interact, evaluate   # reuse both directly
 
 
 logger = logging.getLogger(__name__)
@@ -128,7 +128,7 @@ def run_problem_cross(
         for turn in range(total_turns + 1):
             # Optional assessment injection (uses generator for assessment sampling)
             if assessment_turn >= 0 and turn == assessment_turn and len(texts) > 0:
-                from codes.run_interact import get_assessment
+                from src.interact import get_assessment
                 texts[-1] += get_assessment(
                     data_type=data_type,
                     student_client=generator_client,

@@ -13,20 +13,20 @@ ANALYSIS="$TEST judge.gpus=[4,5,6,7]"
 
 # Progress per turn (judge: Qwen2.5-72B)
 for m in $METHODS; do
-  python -m codes.run_analysis $ANALYSIS analysis.task=progress judge.model=qwen72 \
+  python -m src.analysis.progress $ANALYSIS judge.model=qwen72 \
       experiment.name=$m analysis.compare=$m analysis.baseline=$m
 done
 
 # Question similarity between Self-ODQS and Unscaffolded questions, turn by turn (judge: Qwen2.5-72B)
-python -m codes.run_analysis $ANALYSIS analysis.task=similarity_judge judge.model=qwen72 \
+python -m src.analysis.similarity $ANALYSIS judge.model=qwen72 \
     experiment.name=$SELF analysis.compare=$SELF analysis.baseline=unscaffolded
 
 # Teacher answer leakage, mean across turns (judge: Llama-3.3-70B)
 for m in unscaffolded scaffolded $ASSESSMENT $SELF $PEER; do
-  python -m codes.run_analysis $ANALYSIS analysis.task=leakage judge.model=llama70 \
+  python -m src.analysis.leakage $ANALYSIS judge.model=llama70 \
       experiment.name=$m analysis.compare=$m analysis.baseline=$m
 done
 
 # Question types: Self-ODQS vs. the same setup without training (judge: Llama-3.3-70B)
-python -m codes.run_analysis $ANALYSIS analysis.task=question_type judge.model=llama70 \
+python -m src.analysis.question_types $ANALYSIS judge.model=llama70 \
     experiment.name=$SELF analysis.compare=$SELF analysis.baseline=$ASSESSMENT

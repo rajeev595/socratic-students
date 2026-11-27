@@ -31,13 +31,13 @@ import subprocess
 from openai import OpenAI
 from typing import List, Dict, Any, Tuple, Optional
 
-from codes.data.utils import (
+from src.utils.messages import (
     extract_code_blocks,
     remove_docstring,
     remove_think_tags,
 )
-from codes.prompts.code import CODE_GENERATION_PROMPT
-from codes.utils.llm.chat import chat_complete
+from src.prompts.code import CODE_GENERATION_PROMPT
+from src.utils.llm.chat import chat_complete
 
 
 # ---------------------------

@@ -20,7 +20,7 @@ from tenacity import (
 )
 from tiktoken import encoding_for_model
 
-from codes.utils.llm.server import get_model_name
+from src.utils.llm.server import get_model_name
 
 
 # ---------------------------------------------------------------------------

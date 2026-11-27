@@ -2,7 +2,7 @@
 Analysis figures that are not part of the three main research questions.
 
   progress             LLM-judge progress score per turn for every method
-                       (needs: python -m codes.run_analysis analysis.task=progress ... for each method)
+                       (needs: python -m src.analysis.progress ... for each method)
   assessment-position  Pass@5 when a single assessment is inserted at turn 0..5
                        (needs: experiments named assessment_turn_0 ... assessment_turn_5)
   teacher-size         Pass@5 of one student with teachers of different sizes
@@ -11,9 +11,9 @@ Analysis figures that are not part of the three main research questions.
 Output: <experiments>/plots/ablations/
 
 Usage:
-    python -m codes.plot_ablations progress            [--experiments ./experiments] [--student qwen7] [--dataset gsm8k]
-    python -m codes.plot_ablations assessment-position [--experiments ./experiments] [--student qwen7]
-    python -m codes.plot_ablations teacher-size        [--experiments ./experiments] [--student qwen7] \\
+    python -m src.plots.ablations progress            [--experiments ./experiments] [--student qwen7] [--dataset gsm8k]
+    python -m src.plots.ablations assessment-position [--experiments ./experiments] [--student qwen7]
+    python -m src.plots.ablations teacher-size        [--experiments ./experiments] [--student qwen7] \\
                                                        [--teachers qwen7 qwen14 qwen32 qwen72]
 """
 
@@ -28,7 +28,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from codes.plot_results import DATASETS, LINE_COLORS, MARKERS, TURNS, experiment_folder, find_results
+from src.plots.results import DATASETS, LINE_COLORS, MARKERS, TURNS, experiment_folder, find_results
 
 PROGRESS_METHODS = [
     ("unscaffolded",   "unscaffolded"),
@@ -41,7 +41,7 @@ PROGRESS_METHODS = [
 
 
 def _find_analysis_file(exp_dir: Path, fname: str, judge: Optional[str] = None) -> Optional[Path]:
-    """codes.run_analysis writes to <exp_dir>/analysis; analysis_<judge> is also accepted."""
+    """The analyses write to <exp_dir>/analysis; analysis_<judge> is also accepted."""
     candidates = ([exp_dir / f"analysis_{judge}"] if judge else []) + [exp_dir / "analysis"] + sorted(exp_dir.glob("analysis_*"))
     for d in candidates:
         if (d / fname).exists():

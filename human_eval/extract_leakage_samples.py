@@ -21,10 +21,10 @@ Output (one CSV/JSONL pair per (student, task) combination):
   leakage_samples_all.jsonl / .csv                — merged across all four combinations
 
 Usage:
-  python -m codes.human_eval.extract_leakage_samples \\
+  python -m human_eval.extract_leakage_samples \\
       --n_per_condition 10 \\
       --seed 42 \\
-      --out_dir codes/human_eval/data/
+      --out_dir experiments/human_eval/data
 """
 
 import json
@@ -69,7 +69,7 @@ def sanitize_for_amt(text: str) -> str:
     # Strip any remaining non-ASCII (emojis, etc.)
     return text.encode("ascii", errors="ignore").decode("ascii")
 
-BASE = Path(__file__).resolve().parents[2]  # repo root
+BASE = Path(__file__).resolve().parents[1]  # repo root
 
 # ---------------------------------------------------------------------------
 # Condition maps: (exp_dir_name, transcript_subdir)

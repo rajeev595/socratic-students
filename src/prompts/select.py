@@ -1,12 +1,12 @@
 from typing import Any, Dict
 
 
-from codes.prompts.code import (
+from src.prompts.code import (
     get_humaneval_student_sys_prompt,
     get_humaneval_student_sys_scaffolded_prompt,
     get_humaneval_teacher_sys_prompt,
 )
-from codes.prompts.math import (
+from src.prompts.math import (
     get_gsm_student_sys_prompt,
     get_gsm_student_sys_scaffolded_prompt,
     get_gsm_teacher_sys_prompt,

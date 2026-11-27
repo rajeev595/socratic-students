@@ -1,12 +1,12 @@
 """
 EXPERIMENTAL -- not used in the paper and not maintained.
 
-Variant of codes.data.collect_self_odqs that scores a candidate question by a short look-ahead
+Variant of src.collect.self_odqs that scores a candidate question by a short look-ahead
 rollout (gen.rollout_horizon further turns, discounted by gen.rollout_gamma) instead of by the
 Pass@k right after the teacher's reply.
 
 Usage:
-    python -m codes.experimental.collect_self_odqs_rollout student.model=qwen7 data.type=math \
+    python -m src.experimental.collect_self_odqs_rollout student.model=qwen7 data.type=math \
         experiment.dataset=gsm8k data.name=odqs_rollout data.split=train experiment.name=self_odqs_rollout
 """
 
@@ -25,12 +25,12 @@ from openai import OpenAI
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from codes.data.utils import format_messages, msgs_to_string
-from codes.prompts.utils import _select_sys_prompt, _problem_greeting
-from codes.run_interact import interact, evaluate, get_assessment
-from codes.utils.llm.server import build_client
-from codes.utils.vars import set_envs
-from codes.utils.file_ops import load_json_resilient
+from src.utils.messages import format_messages, msgs_to_string
+from src.prompts.select import _select_sys_prompt, _problem_greeting
+from src.interact import interact, evaluate, get_assessment
+from src.utils.llm.server import build_client
+from src.utils.env import set_envs
+from src.utils.io import load_json_resilient
 
 
 logger = logging.getLogger(__name__)
