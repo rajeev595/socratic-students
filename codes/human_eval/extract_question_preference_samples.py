@@ -52,9 +52,9 @@ TASK_CONFIGS = {
 
 BASELINE_LABEL   = "no_training"
 COMPARE_LABEL    = "self_odqs"
-STUDENT_TURN_IDX = 1  # index 0 = teacher greeting, index 1 = first student turn (Turn 0)
+QUESTION_TURN    = 0  # compare the first questions (turn 0)
 
-CSV_FIELDNAMES = ["item_id", "problem_id", "student", "dataset", "turn_idx",
+CSV_FIELDNAMES = ["item_id", "problem_id", "student", "dataset", "turn",
                   "label_a", "label_b", "problem_prompt", "question_a", "question_b"]
 
 
@@ -85,12 +85,14 @@ def _item_id(task: str, problem_id: str) -> str:
     return hashlib.md5(key.encode()).hexdigest()[:12]
 
 
-def _load_turn(transcript_path: Path, turn_idx: int) -> str | None:
+def _load_question(transcript_path: Path, turn: int) -> str | None:
+    """The student's question of the given turn (message 2 * turn + 1; message 0 is the teacher greeting)."""
     try:
-        turns = json.loads(transcript_path.read_text())
-        if len(turns) <= turn_idx:
+        messages = json.loads(transcript_path.read_text())
+        index = 2 * turn + 1
+        if len(messages) <= index:
             return None
-        return turns[turn_idx]["content"].strip()
+        return messages[index]["content"].strip()
     except Exception:
         return None
 
@@ -145,8 +147,8 @@ def main():
 
     items = []
     for pid in sampled_ids:
-        baseline_q = _load_turn(baseline_dir / f"{pid}.json", STUDENT_TURN_IDX)
-        compare_q  = _load_turn(compare_dir  / f"{pid}.json", STUDENT_TURN_IDX)
+        baseline_q = _load_question(baseline_dir / f"{pid}.json", QUESTION_TURN)
+        compare_q  = _load_question(compare_dir  / f"{pid}.json", QUESTION_TURN)
         if not baseline_q or not compare_q:
             print(f"  Skipping {pid}: missing transcript")
             continue
@@ -165,7 +167,7 @@ def main():
             "problem_id":     pid,
             "student":        args.student,
             "dataset":        dataset,
-            "turn_idx":       STUDENT_TURN_IDX,
+            "turn":           QUESTION_TURN,
             "label_a":        label_a,
             "label_b":        label_b,
             "problem_prompt": problem_map[pid],

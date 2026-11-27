@@ -14,7 +14,7 @@ python -m codes.run_interact $TEST experiment.name=unscaffolded
 python -m codes.run_interact $TEST experiment.name=scaffolded experiment.scaffolded=True
 
 # Pre-Assessment: Scaffolded + teacher feedback on a first attempt before turn 0
-python -m codes.run_interact $TEST experiment.name=pre_assessment experiment.scaffolded=True experiment.assessment_turn=1
+python -m codes.run_interact $TEST experiment.name=pre_assessment experiment.scaffolded=True experiment.assessment_turn=0
 
 # Mid-Assessment: Scaffolded + teacher feedback on an attempt at turn 2
-python -m codes.run_interact $TEST experiment.name=mid_assessment experiment.scaffolded=True experiment.assessment_turn=5
+python -m codes.run_interact $TEST experiment.name=mid_assessment experiment.scaffolded=True experiment.assessment_turn=2

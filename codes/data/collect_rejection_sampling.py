@@ -182,19 +182,19 @@ def run_problem_judge(
     total_student_prompt_tks = total_student_completion_tks = 0
 
     # Initialize / resume conversation
-    if start_from_turn <= 1:
+    if start_from_turn <= 0:
         texts: List[Any] = [_problem_greeting(data_type)]
-        cur_start = 1
+        cur_start = 0
         logger.debug(f"[{pid}] starting fresh")
     else:
         texts = ["Hi there! Let's pick up the conversation."]
-        cur_start = 1
+        cur_start = 0
         logger.warning(f"[{pid}] resume requested but no transcript found; starting fresh")
 
     pairs: List[Dict[str, Any]] = []
     chosen_list: List[Dict[str, Any]] = []
 
-    for turn in range(cur_start, total_turns, 2):
+    for turn in range(cur_start, total_turns):
         # ---- Student: sample K candidate questions
         student_replies, p_tks, c_tks = interact(
             True,

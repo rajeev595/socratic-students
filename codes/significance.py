@@ -88,7 +88,7 @@ def compare(
     turns: Iterable[int],
     k: int = 5,
 ) -> Dict[str, float]:
-    """Compare method_a against method_b over the given turns (message indices)."""
+    """Compare method_a against method_b over the given turns."""
     turns = sorted(int(t) for t in turns)
     A = load_pass_by_turn(_itemized(exp_root, method_a, teacher, student, dataset), turns, k)
     B = load_pass_by_turn(_itemized(exp_root, method_b, teacher, student, dataset), turns, k)
@@ -139,8 +139,8 @@ def main():
     all_turns = TURNS
     results: Dict[str, Dict[str, Dict[str, float]]] = {}
 
-    early_turns = [t for t in all_turns if t <= 5]   # paper turns 0-2
-    late_turns = [t for t in all_turns if t >= 5]    # paper turns 2-5 (from the Mid-Assessment onwards)
+    early_turns = [t for t in all_turns if t <= 2]   # turns 0-2
+    late_turns = [t for t in all_turns if t >= 2]    # turns 2-5 (from the Mid-Assessment onwards)
 
     for dataset in args.datasets:
         best = BEST_ASSESSMENT[dataset]

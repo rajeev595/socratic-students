@@ -123,20 +123,17 @@ train:
 # ---------------------------------------------------------------------------
 # Interaction
 #
-# Turn indexing. A transcript is a list of messages: index 0 is the teacher
-# greeting, odd indices are student questions, even indices are teacher replies.
-# Turn t in the paper (t = 0..5) is evaluated at message index 2t + 1:
-#     paper turn   0  1  2  3  4  5
-#     index        1  3  5  7  9  11
-# So total_turns=11 gives the paper's N = 5 questioning turns.
+# Turns are numbered as in the paper. With N = total_turns questioning turns, every
+# turn t = 0..N evaluates the student (Pass@k) and then lets it ask a question that
+# the teacher answers. Turn 0 is the static baseline, before any question.
 # ---------------------------------------------------------------------------
 experiment:
   name: unscaffolded              # label for this run; results go to <experiments>/<name>/<teacher>/<student>/<dataset>
   scaffolded: False               # True = Scaffolded student prompt, False = Unscaffolded
-  assessment_turn: -1             # -1 = no assessment, 1 = Pre-Assessment (paper turn 0), 5 = Mid-Assessment (paper turn 2)
+  assessment_turn: -1             # -1 = no assessment, 0 = Pre-Assessment, 2 = Mid-Assessment
   dataset: gsm8k                  # gsm8k (math) | humaneval_opc (code)
-  total_turns: 11
-  start_from_turn: 1              # 1 = new conversation
+  total_turns: 5                  # N, the number of questioning turns
+  start_from_turn: 0              # 0 = new conversation; t > 0 resumes saved transcripts at turn t
   ood: False                      # leave False (evaluating on a separate problem set is not part of the paper)
   num_workers: 128                # problems processed in parallel
   chunk_size: 256                 # results are checkpointed after every chunk

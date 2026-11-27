@@ -54,9 +54,7 @@ CONDITIONS = [
     ("C2_ODQS_ODQS", _BLUE,   "o", "Full"),
 ]
 
-# Actual turn keys in the JSON files
-TURNS = [1, 3, 5, 7, 9, 11]
-# X-axis positions shown as 0, 1, 2, 3, 4, 5
+TURNS = [0, 1, 2, 3, 4, 5]
 X = list(range(len(TURNS)))
 
 TEACHER = "qwen72"
@@ -80,7 +78,7 @@ def load(path: Path) -> dict:
     return {int(t): (d[t]["5"][0], d[t]["5"][1]) for t in d}
 
 
-ASSESSMENT_TURN = {"math": 0, "code": 2}   # paper turn of the assessment used in the cross-eval runs
+ASSESSMENT_TURN = {"math": 0, "code": 2}   # turn of the assessment used in the cross-eval runs
 
 
 def condition_paths(base: Path, model: str, task: str, matched: bool = False) -> dict:

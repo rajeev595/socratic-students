@@ -1,12 +1,15 @@
 """
 Student-teacher interaction with inline evaluation.
 
-For every problem the student and teacher alternate for `experiment.total_turns` messages.
-Before each student question the student is asked for a direct answer `gen.num_samples`
-times and Pass@k is computed, giving one score per questioning turn.
+For every problem the conversation runs for N = `experiment.total_turns` questioning turns.
+At every turn t = 0..N (as in the paper):
+  1. if t == `experiment.assessment_turn`, the teacher's assessment of two student attempts is added,
+  2. the student is asked for a direct answer `gen.num_samples` times and Pass@k is computed,
+  3. the student asks a question and the teacher replies (the question of the last turn gets no reply).
+Turn 0 is therefore the static baseline, before any question has been asked.
 
   experiment.scaffolded        False = Unscaffolded prompt, True = Scaffolded prompt
-  experiment.assessment_turn   -1 = none, 1 = Pre-Assessment, 5 = Mid-Assessment
+  experiment.assessment_turn   -1 = none, 0 = Pre-Assessment, 2 = Mid-Assessment
   student.lora.{name,path}     evaluate an ODQS-trained student
 
 Output (under <experiments>/<experiment.name>/<teacher>/<student>/<dataset>/):
@@ -35,7 +38,7 @@ from openai import OpenAI
 from codes.utils.llm.server import build_client
 from codes.utils.llm.chat import chat_complete
 from codes.utils.vars import set_envs
-from codes.data.utils import remove_think_tags, msgs_to_string, format_messages
+from codes.data.utils import remove_think_tags, msgs_to_string, format_messages, transcript_messages
 from codes.prompts.utils import _select_sys_prompt, _problem_greeting
 from codes.evaluation.code import generate_code_completions, evaluate_code_completion, get_code_feedback_from_eval
 from codes.evaluation.math import generate_math_completions, evaluate_math_completion, get_math_feedback_from_eval
@@ -222,8 +225,8 @@ def run_problem(
     k_values: List[int],
     num_samples: int,
     assessment_turn: int,
-    start_from_turn: int = 1,
-    total_turns: int = 10,
+    start_from_turn: int = 0,
+    total_turns: int = 5,
     use_scaffold: bool = False,
     is_ood: bool = False,
 ) -> Tuple[
@@ -235,9 +238,8 @@ def run_problem(
     """
     Run a single problem end-to-end: student↔teacher interaction and inline evaluation.
     Returns:
-      - edited_msgs: message dicts with roles and turns
-      - all_results: turn -> list of pass@k dicts (to aggregate later)
-      - performance_tracker: per-student-turn pass@k dicts in sequence
+      - generations: turn -> sampled answers with their pass/fail flags
+      - pass_at_k_scores: turn -> pass@k dict
       - total_teacher_prompt_tks, total_teacher_completion_tks
       - total_student_prompt_tks, total_student_completion_tks
     """
@@ -247,41 +249,31 @@ def run_problem(
         pid = interaction_problem["id"]
         transcript_fpath = os.path.join(transcripts_dir, f"{pid}.json")
 
-        if os.path.exists(transcript_fpath):
-            logger.info(f"loading transcript from {transcript_fpath}")
-            data = load_json_resilient(transcript_fpath)
-
-            if len(data) == total_turns:
-                texts = [ex["content"] for ex in data]
-                return texts, {}, 0, 0, 0, 0
-
         pass_at_k_scores = {}
         generations = {}
         total_teacher_prompt_tks = total_teacher_completion_tks = 0
         total_student_prompt_tks = total_student_completion_tks = 0
 
-        # Initialize / resume conversation
-        if start_from_turn <= 1:
+        # Initialize / resume conversation. A transcript holds the teacher greeting followed by one
+        # (student question, teacher reply) pair per turn, so turn t starts after 2t + 1 messages.
+        if start_from_turn <= 0:
             texts: List[str] = [_problem_greeting(data_type)]
-            cur_start = 1
+            cur_start = 0
             logger.debug(f"[{pid}] starting fresh")
         else:
-            tpath = os.path.join(transcripts_dir, f"{pid}.json")
-            if os.path.exists(tpath):
-                prev = load_json_resilient(tpath)
-                texts = [m["content"] for m in prev][:start_from_turn]
+            if os.path.exists(transcript_fpath):
+                prev = load_json_resilient(transcript_fpath)
+                texts = [m["content"] for m in prev][: 2 * start_from_turn + 1]
                 cur_start = start_from_turn
-                logger.info(f"[{pid}] resumed at turn {cur_start} from {tpath}")
+                logger.info(f"[{pid}] resumed at turn {cur_start} from {transcript_fpath}")
             else:
                 texts = ["Hi there! Let's pick up the conversation."]
-                cur_start = 1
+                cur_start = 0
                 logger.warning(f"[{pid}] resume requested but no transcript found; starting fresh")
 
-        for turn in range(cur_start, total_turns + 1, 1):
-            is_student = (turn % 2 == 1)
-
-            # Optional assessment injected into previous text
-            if assessment_turn > 0 and turn == assessment_turn and len(texts) > 0:
+        for turn in range(cur_start, total_turns + 1):
+            # Optional assessment, appended to the teacher's latest message
+            if assessment_turn >= 0 and turn == assessment_turn and len(texts) > 0:
                 texts[-1] += get_assessment(
                     data_type=data_type,
                     student_client=student_client,
@@ -295,59 +287,66 @@ def run_problem(
                 )
                 logger.debug(f"[{pid}] assessment injected at turn {turn}")
 
-            # Evaluation on student turns
-            if is_student:
-                prev_convo = msgs_to_string(texts[: turn])
+            # Evaluation: can the student solve the problem given the conversation so far?
+            prev_convo = msgs_to_string(texts)
 
-                pass_at_k_scores_turn, generations_turn, p_tks, c_tks = evaluate(
-                    prev_convo=prev_convo,
-                    data_type=data_type,
-                    student_client=student_client,
-                    student_name=student_name,
-                    student_temperature=0.3,
-                    teacher_client=teacher_client,
-                    teacher_name=teacher_name,
-                    teacher_temperature=teacher_temperature,
-                    problem=evaluation_problem,
-                    k_values=k_values,
-                    num_samples=num_samples,
-                    is_ood=is_ood,
-                )
+            pass_at_k_scores_turn, generations_turn, p_tks, c_tks = evaluate(
+                prev_convo=prev_convo,
+                data_type=data_type,
+                student_client=student_client,
+                student_name=student_name,
+                student_temperature=0.3,
+                teacher_client=teacher_client,
+                teacher_name=teacher_name,
+                teacher_temperature=teacher_temperature,
+                problem=evaluation_problem,
+                k_values=k_values,
+                num_samples=num_samples,
+                is_ood=is_ood,
+            )
 
-                pass_at_k_scores[turn] = pass_at_k_scores_turn
-                total_student_prompt_tks += p_tks
-                total_student_completion_tks += c_tks
-                generations[turn] = generations_turn
+            pass_at_k_scores[turn] = pass_at_k_scores_turn
+            total_student_prompt_tks += p_tks
+            total_student_completion_tks += c_tks
+            generations[turn] = generations_turn
 
-                logger.debug(f"[{evaluation_problem['id']}] turn {turn} pass@k={pass_at_k_scores[turn]}")
+            logger.debug(f"[{evaluation_problem['id']}] turn {turn} pass@k={pass_at_k_scores[turn]}")
 
-            # Run interaction step
+            # Student question
             replies, p_tks, c_tks = interact(
-                is_student,
+                True,
                 texts,
                 interaction_problem,
                 1,
                 data_type,
-                student_client if is_student else teacher_client,
-                student_name if is_student else teacher_name,
-                student_temperature if is_student else teacher_temperature,
+                student_client,
+                student_name,
+                student_temperature,
                 use_scaffold
             )
-
-            # Update chat transcript and token counts
             texts.append(replies[0])
-            if is_student:
-                total_student_prompt_tks += p_tks
-                total_student_completion_tks += c_tks
-            else:
+            total_student_prompt_tks += p_tks
+            total_student_completion_tks += c_tks
+
+            # Teacher reply (the question of the last turn is not answered)
+            if turn < total_turns:
+                replies, p_tks, c_tks = interact(
+                    False,
+                    texts,
+                    interaction_problem,
+                    1,
+                    data_type,
+                    teacher_client,
+                    teacher_name,
+                    teacher_temperature,
+                    use_scaffold
+                )
+                texts.append(replies[0])
                 total_teacher_prompt_tks += p_tks
                 total_teacher_completion_tks += c_tks
 
         # Save transcript with roles (model names as roles)
-        edited_msgs: List[Dict[str, Any]] = []
-        for idx, text in enumerate(texts):
-            role = student_name if (idx % 2 == 1) else teacher_name
-            edited_msgs.append({"role": role, "turn": idx, "content": text})
+        edited_msgs: List[Dict[str, Any]] = transcript_messages(texts, student_name, teacher_name)
 
         # Save transcript
         save_json_atomic(os.path.join(transcripts_dir, f"{pid}.json"), edited_msgs)
@@ -396,7 +395,7 @@ def main(cfg: DictConfig) -> None:
     os.makedirs(transcripts_dir, exist_ok=True)
 
     # Collect results across problems for aggregation
-    turn_results: Dict[int, List[Dict[int, float]]] = {turn: [] for turn in range(start_from_turn, total_turns + 1, 2)}
+    turn_results: Dict[int, List[Dict[int, float]]] = {turn: [] for turn in range(start_from_turn, total_turns + 1)}
     all_results = {}
 
     # Load existing results

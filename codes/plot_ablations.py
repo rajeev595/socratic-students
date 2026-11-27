@@ -3,7 +3,7 @@ Analysis figures that are not part of the three main research questions.
 
   progress             LLM-judge progress score per turn for every method
                        (needs: python -m codes.run_analysis analysis.task=progress ... for each method)
-  assessment-position  Pass@5 when a single assessment is inserted at paper turn 0..5
+  assessment-position  Pass@5 when a single assessment is inserted at turn 0..5
                        (needs: experiments named assessment_turn_0 ... assessment_turn_5)
   teacher-size         Pass@5 of one student with teachers of different sizes
                        (needs: unscaffolded runs with teacher.model=<each teacher>)

@@ -17,8 +17,8 @@ NUM_GPUS=${NUM_GPUS:-8}
 EXTRA=${EXTRA:-}
 
 case "$DOMAIN" in
-  math) DATASET=gsm8k;         ASSESSMENT=pre_assessment; ASSESSMENT_TURN=1 ;;   # Pre-Assessment (paper turn 0)
-  code) DATASET=humaneval_opc; ASSESSMENT=mid_assessment; ASSESSMENT_TURN=5 ;;   # Mid-Assessment (paper turn 2)
+  math) DATASET=gsm8k;         ASSESSMENT=pre_assessment; ASSESSMENT_TURN=0 ;;   # Pre-Assessment (turn 0)
+  code) DATASET=humaneval_opc; ASSESSMENT=mid_assessment; ASSESSMENT_TURN=2 ;;   # Mid-Assessment (turn 2)
   *) echo "DOMAIN must be math or code" >&2; exit 1 ;;
 esac
 

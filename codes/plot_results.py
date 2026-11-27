@@ -44,7 +44,7 @@ MARKERS     = ["o", "s", "^", "D", "P"]
 TEACHERS = ["qwen72"]
 STUDENTS = ["qwen7", "mistral7"]
 DATASETS = ["gsm8k", "humaneval_opc"]
-TURNS    = [1, 3, 5, 7, 9, 11]      # message indices of paper turns 0..5 (see configs/config.yaml)
+TURNS    = [0, 1, 2, 3, 4, 5]       # turn 0 = before any question (static baseline)
 K_VALUES = [1, 5, 10]
 
 # The assessment that works best per domain (RQ2); ODQS students are evaluated with it (RQ3).

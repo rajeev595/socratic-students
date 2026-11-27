@@ -57,8 +57,8 @@ command line. All commands are run from the repository root.
 | Static baseline | turn 0 of any run (Pass@k before the first question) |
 | Unscaffolded | `experiment.scaffolded=False` (default) |
 | Scaffolded | `experiment.scaffolded=True` |
-| Pre-Assessment | `experiment.assessment_turn=1` |
-| Mid-Assessment | `experiment.assessment_turn=5` |
+| Pre-Assessment | `experiment.assessment_turn=0` |
+| Mid-Assessment | `experiment.assessment_turn=2` |
 | Self-ODQS | `codes.data.collect_self_odqs` then `codes.run_sft_dpo` with `data.source=self` |
 | Peer-ODQS | `codes.data.collect_peer_odqs` then `codes.run_sft_dpo` with `data.source=peer` |
 | Rejection Sampling | `codes.data.collect_rejection_sampling` then `codes.run_sft_dpo` |
@@ -77,16 +77,10 @@ Models used in the paper, by their nickname in `codes/utils/llm/server.py`:
 
 Any other Hugging Face model id or local path can be used in place of a nickname.
 
-**Turn indexing.** A transcript is a list of messages: index 0 is the teacher's greeting, odd indices
-are student questions and even indices are teacher replies. The student is evaluated before each of
-its questions, so turn `t` of the paper (`t = 0..5`) is stored under message index `2t + 1`:
-
-| Paper turn | 0 | 1 | 2 | 3 | 4 | 5 |
-|---|---|---|---|---|---|---|
-| Key in the result files | 1 | 3 | 5 | 7 | 9 | 11 |
-
-`experiment.total_turns=11` (the default) gives the paper's `N = 5` questioning turns, and
-`experiment.assessment_turn` uses the same message index (1 = before the first question, 5 = paper turn 2).
+**Turns** are numbered as in the paper. With `experiment.total_turns=5` (N = 5 questioning turns),
+every turn `t = 0..5` first evaluates the student (Pass@k) and then lets it ask a question that the
+teacher answers. Turn 0 is the static baseline, before any question has been asked. Result files,
+collected data and analysis outputs are all keyed by this turn number.
 
 **Experiment names.** `experiment.name` is only a label: it decides where results are written
 (`experiments/<name>/<teacher>/<student>/<dataset>/`). The plotting and analysis scripts expect the
@@ -99,8 +93,8 @@ names used by the scripts in `scripts/`:
 | `self_odqs`, `peer_odqs` | ODQS data collection, training checkpoints, and the trained student evaluated without scaffold or assessment |
 | `self_odqs_pre_assessment`, `self_odqs_mid_assessment`, `peer_odqs_...` | trained student evaluated with Scaffolded + assessment (the reported ODQS results; Pre for math, Mid for code) |
 | `rejection_sampling`, `rejection_sampling_dpo` | LLM-judge baselines |
-| `assessment_turn_0` ... `assessment_turn_5` | Unscaffolded + one assessment at paper turn `t` |
-| `self_odqs_assessment_turn_<t>` | trained student, Unscaffolded + assessment at paper turn `t` |
+| `assessment_turn_0` ... `assessment_turn_5` | Unscaffolded + one assessment at turn `t` |
+| `self_odqs_assessment_turn_<t>` | trained student, Unscaffolded + assessment at turn `t` |
 | `cross_eval/gen_<generator>__eval_<solver>` | generator-vs-solver runs |
 
 ## Replicating the paper
@@ -165,8 +159,8 @@ C="student.model=qwen7 data.type=math experiment.dataset=gsm8k data.split=test d
 
 python -m codes.run_interact $C experiment.name=unscaffolded
 python -m codes.run_interact $C experiment.name=scaffolded     experiment.scaffolded=True
-python -m codes.run_interact $C experiment.name=pre_assessment experiment.scaffolded=True experiment.assessment_turn=1
-python -m codes.run_interact $C experiment.name=mid_assessment experiment.scaffolded=True experiment.assessment_turn=5
+python -m codes.run_interact $C experiment.name=pre_assessment experiment.scaffolded=True experiment.assessment_turn=0
+python -m codes.run_interact $C experiment.name=mid_assessment experiment.scaffolded=True experiment.assessment_turn=2
 ```
 
 ### Step 3: ODQS
@@ -181,12 +175,12 @@ python -m codes.data.collect_self_odqs $C experiment.name=self_odqs data.split=v
 # (b) train the student with DPO (LoRA)
 accelerate launch --multi_gpu --num_processes 8 -m codes.run_sft_dpo $C experiment.name=self_odqs
 
-# (c) evaluate the trained student (Pre-Assessment for math; use assessment_turn=5 for code)
+# (c) evaluate the trained student (Pre-Assessment for math; use assessment_turn=2 for code)
 CKPT=$(ls -d experiments/self_odqs/qwen72/qwen7/gsm8k/dpo_0/checkpoint-* | sort -V | head -n1)
 python -m codes.run_interact student.model=qwen7 data.type=math experiment.dataset=gsm8k \
     data.split=test data.data_amount=1000 \
     student.lora.name=qwen7_odqs student.lora.path=$CKPT \
-    experiment.name=self_odqs_pre_assessment experiment.scaffolded=True experiment.assessment_turn=1
+    experiment.name=self_odqs_pre_assessment experiment.scaffolded=True experiment.assessment_turn=0
 ```
 
 For Peer-ODQS use `codes.data.collect_peer_odqs`, `data.source=peer` and `experiment.name=peer_odqs`.
@@ -250,7 +244,7 @@ data/<teacher>/<dataset>/
   odqs/*_sft_*.jsonl, *_grpo_*.jsonl             chosen questions / all scored candidates per turn
 
 experiments/<name>/<teacher>/<student>/<dataset>/
-  transcripts_0/<problem id>.json                [{role, turn, content}, ...]
+  transcripts_0/<problem id>.json                [{role, index, turn, content}, ...]
   itemized_results_0.json                        {problem id: {results: {turn: {k: Pass@k}}, generations: ...}}
   aggregate_results_0.json                       {turn: {k: [bootstrapped mean, std]}}
   dpo_0/checkpoint-*/                            LoRA checkpoints (training runs only)
@@ -262,7 +256,7 @@ A preference pair is one JSON object per line:
 
 ```
 {"prompt": [chat messages up to this turn], "chosen_response": "...", "rejected_response": "...",
- "chosen_reward": {...}, "rejected_reward": {...}, "problem": {...}, "turn": 1, "iteration": 0}
+ "chosen_reward": {...}, "rejected_reward": {...}, "problem": {...}, "turn": 0, "iteration": 0}
 ```
 
 ## Configuration

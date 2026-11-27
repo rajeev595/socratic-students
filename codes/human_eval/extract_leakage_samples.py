@@ -141,21 +141,21 @@ def load_transcript(fpath: Path) -> list:
 
 def transcript_to_pairs(turns: list, teacher_role: str) -> list[dict]:
     """
-    Extract (student_question, teacher_response) pairs.
-    Skips turn 0 (teacher greeting). Matches any non-teacher preceding turn as
-    the student question — handles role variants like mistral7_dpo, qwen7_dpo.
-    Returns list of dicts: turn_idx, student_q, teacher_response.
+    Extract (student_question, teacher_response) pairs, one per turn.
+    Skips the teacher greeting. Matches any non-teacher preceding message as
+    the student question — handles LoRA role names such as mistral7_odqs.
+    Returns list of dicts: turn, student_q, teacher_response.
     """
     pairs = []
     for i, turn in enumerate(turns):
-        if turn["role"] == teacher_role and turn["turn"] >= 2:
+        if turn["role"] == teacher_role and turn["turn"] is not None:
             student_turn = next(
                 (t for t in reversed(turns[:i]) if t["role"] != teacher_role), None
             )
             if student_turn is None:
                 continue
             pairs.append({
-                "turn_idx": turn["turn"],
+                "turn": turn["turn"],
                 "student_q": student_turn["content"],
                 "teacher_response": turn["content"],
             })
@@ -163,8 +163,8 @@ def transcript_to_pairs(turns: list, teacher_role: str) -> list[dict]:
 
 
 def make_item_id(student: str, task_type: str, condition: str,
-                 problem_id: int, turn_idx: int) -> str:
-    raw = f"{student}_{task_type}_{condition}_{problem_id}_{turn_idx}"
+                 problem_id: int, turn: int) -> str:
+    raw = f"{student}_{task_type}_{condition}_{problem_id}_{turn}"
     return hashlib.md5(raw.encode()).hexdigest()[:12]
 
 
@@ -208,11 +208,11 @@ def sample_condition(
         if not pairs:
             continue
 
-        # Use only early turns (2–6): the student hasn't solved the problem yet,
-        # so the teacher's response is a genuine hint/reveal decision.
-        # Late turns (≥8) are often just teacher confirmation after the student
-        # already stated the correct answer — not real leakage.
-        early_pairs = [p for p in pairs if 2 <= p["turn_idx"] <= 4]
+        # Use only the teacher replies of the first two turns (0 and 1): the student hasn't
+        # solved the problem yet, so the teacher's response is a genuine hint/reveal decision.
+        # Later replies are often just confirmation after the student already stated the
+        # correct answer — not real leakage.
+        early_pairs = [p for p in pairs if p["turn"] <= 1]
         if not early_pairs:
             continue
         chosen = rng.choice(early_pairs)
@@ -220,13 +220,13 @@ def sample_condition(
         problem = problems[problem_id]
         items.append({
             "item_id": make_item_id(student, task_type, condition_name,
-                                    problem_id, chosen["turn_idx"]),
+                                    problem_id, chosen["turn"]),
             "student": student,
             "task_type": task_type,
             "condition": condition_name,
             "condition_label": CONDITION_LABELS[condition_name],
             "problem_id": str(problem_id),
-            "turn_idx": chosen["turn_idx"],
+            "turn": chosen["turn"],
             "problem_prompt": problem["prompt"].strip(),
             "gold_solution": problem["solution"].strip(),
             "student_question": chosen["student_q"],
@@ -246,7 +246,7 @@ GOLD_ITEMS_CODING = [
         "item_id": "gold_coding_1",
         "condition": "gold", "is_gold": True, "gold_label": 1,
         "student": "GOLD", "task_type": "coding",
-        "problem_id": "GOLD", "turn_idx": 4,
+        "problem_id": "GOLD", "turn": 1,
         "problem_prompt": "Write a Python function `add(a, b)` that returns the sum of two numbers.",
         "gold_solution": "def add(a, b):\n    return a + b",
         "student_question": "Should I use + or is there a built-in function for this?",
@@ -259,7 +259,7 @@ GOLD_ITEMS_CODING = [
         "item_id": "gold_coding_5",
         "condition": "gold", "is_gold": True, "gold_label": 5,
         "student": "GOLD", "task_type": "coding",
-        "problem_id": "GOLD", "turn_idx": 4,
+        "problem_id": "GOLD", "turn": 1,
         "problem_prompt": "Write a Python function `add(a, b)` that returns the sum of two numbers.",
         "gold_solution": "def add(a, b):\n    return a + b",
         "student_question": "Can you show me how to write this?",
@@ -274,7 +274,7 @@ GOLD_ITEMS_CODING = [
         "item_id": "gold_coding_3",
         "condition": "gold", "is_gold": True, "gold_label": 3,
         "student": "GOLD", "task_type": "coding",
-        "problem_id": "GOLD", "turn_idx": 4,
+        "problem_id": "GOLD", "turn": 1,
         "problem_prompt": "Write a Python function `add(a, b)` that returns the sum of two numbers.",
         "gold_solution": "def add(a, b):\n    return a + b",
         "student_question": "What exactly should the return statement say?",
@@ -290,7 +290,7 @@ GOLD_ITEMS_MATH = [
         "item_id": "gold_math_1",
         "condition": "gold", "is_gold": True, "gold_label": 1,
         "student": "GOLD", "task_type": "math",
-        "problem_id": "GOLD", "turn_idx": 4,
+        "problem_id": "GOLD", "turn": 1,
         "problem_prompt": "A store sells apples for $2 each. Tom buys 5 apples. How much does he spend?",
         "gold_solution": "Tom buys 5 apples at $2 each.\n5 x 2 = $10\n#### 10",
         "student_question": "But how do I set up the equation?",
@@ -303,7 +303,7 @@ GOLD_ITEMS_MATH = [
         "item_id": "gold_math_5",
         "condition": "gold", "is_gold": True, "gold_label": 5,
         "student": "GOLD", "task_type": "math",
-        "problem_id": "GOLD", "turn_idx": 4,
+        "problem_id": "GOLD", "turn": 1,
         "problem_prompt": "A store sells apples for $2 each. Tom buys 5 apples. How much does he spend?",
         "gold_solution": "Tom buys 5 apples at $2 each.\n5 x 2 = $10\n#### 10",
         "student_question": "Can you just tell me the answer?",
@@ -317,7 +317,7 @@ GOLD_ITEMS_MATH = [
         "item_id": "gold_math_3",
         "condition": "gold", "is_gold": True, "gold_label": 3,
         "student": "GOLD", "task_type": "math",
-        "problem_id": "GOLD", "turn_idx": 4,
+        "problem_id": "GOLD", "turn": 1,
         "problem_prompt": "A store sells apples for $2 each. Tom buys 5 apples. How much does he spend?",
         "gold_solution": "Tom buys 5 apples at $2 each.\n5 x 2 = $10\n#### 10",
         "student_question": "So do I multiply those two numbers?",
@@ -337,7 +337,7 @@ GOLD_ITEMS_BY_TASK = {"coding": GOLD_ITEMS_CODING, "math": GOLD_ITEMS_MATH}
 
 CSV_FIELDNAMES = [
     "item_id", "student", "task_type", "condition", "condition_label",
-    "problem_id", "turn_idx",
+    "problem_id", "turn",
     "problem_prompt", "gold_solution",
     "student_question", "teacher_response",
 ]

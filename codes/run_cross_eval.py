@@ -50,7 +50,7 @@ from tqdm import tqdm
 
 from codes.utils.llm.server import build_client
 from codes.utils.vars import set_envs
-from codes.data.utils import msgs_to_string
+from codes.data.utils import msgs_to_string, transcript_messages
 from codes.prompts.utils import _select_sys_prompt, _problem_greeting
 from codes.evaluation.utils import bootstrap_aggregate
 from codes.utils.file_ops import save_json_atomic, load_json_resilient
@@ -95,13 +95,14 @@ def run_problem_cross(
         # Resume if transcript already exists and is complete
         if os.path.exists(transcript_path):
             existing = load_json_resilient(transcript_path)
-            if existing and len(existing) >= total_turns:
+            if existing and len(existing) >= 2 * total_turns + 2:
                 logger.info(f"[{pid}] transcript complete, skipping interaction")
                 texts = [t["content"] for t in existing]
                 # Still need to re-evaluate with evaluator model
                 pass_at_k_scores, generations = {}, {}
-                for turn_idx in range(1, total_turns + 1, 2):  # student turns
-                    prev_convo = msgs_to_string(texts[:turn_idx])
+                for turn in range(total_turns + 1):
+                    # conversation as it stood at this turn: greeting + one (question, reply) pair per earlier turn
+                    prev_convo = msgs_to_string(texts[: 2 * turn + 1])
                     scores, gens, _, _ = evaluate(
                         prev_convo=prev_convo,
                         data_type=data_type,
@@ -116,19 +117,17 @@ def run_problem_cross(
                         num_samples=num_samples,
                         is_ood=False,
                     )
-                    pass_at_k_scores[turn_idx] = scores
-                    generations[turn_idx] = gens
+                    pass_at_k_scores[turn] = scores
+                    generations[turn] = gens
                 return pass_at_k_scores, generations
 
         texts: List[str] = [_problem_greeting(data_type)]
         pass_at_k_scores: Dict[int, Any] = {}
         generations: Dict[int, Any] = {}
 
-        for turn in range(1, total_turns + 1):
-            is_student = (turn % 2 == 1)
-
+        for turn in range(total_turns + 1):
             # Optional assessment injection (uses generator for assessment sampling)
-            if assessment_turn > 0 and turn == assessment_turn and len(texts) > 0:
+            if assessment_turn >= 0 and turn == assessment_turn and len(texts) > 0:
                 from codes.run_interact import get_assessment
                 texts[-1] += get_assessment(
                     data_type=data_type,
@@ -142,46 +141,43 @@ def run_problem_cross(
                     texts=texts,
                 )
 
-            # Pass@k evaluation at student turns — uses EVALUATOR
-            if is_student:
-                prev_convo = msgs_to_string(texts[:turn])
-                scores, gens, _, _ = evaluate(
-                    prev_convo=prev_convo,
-                    data_type=data_type,
-                    student_client=evaluator_client,
-                    student_name=evaluator_name,
-                    student_temperature=evaluator_temperature,
-                    teacher_client=teacher_client,
-                    teacher_name=teacher_name,
-                    teacher_temperature=teacher_temperature,
-                    problem=problem,
-                    k_values=k_values,
-                    num_samples=num_samples,
-                    is_ood=False,
-                )
-                pass_at_k_scores[turn] = scores
-                generations[turn] = gens
-                logger.debug(f"[{pid}] turn {turn} pass@k={scores}")
+            # Pass@k evaluation -- uses the EVALUATOR
+            prev_convo = msgs_to_string(texts)
+            scores, gens, _, _ = evaluate(
+                prev_convo=prev_convo,
+                data_type=data_type,
+                student_client=evaluator_client,
+                student_name=evaluator_name,
+                student_temperature=evaluator_temperature,
+                teacher_client=teacher_client,
+                teacher_name=teacher_name,
+                teacher_temperature=teacher_temperature,
+                problem=problem,
+                k_values=k_values,
+                num_samples=num_samples,
+                is_ood=False,
+            )
+            pass_at_k_scores[turn] = scores
+            generations[turn] = gens
+            logger.debug(f"[{pid}] turn {turn} pass@k={scores}")
 
-            # Interaction step — uses GENERATOR for student turns, teacher otherwise
+            # Student question -- uses the GENERATOR
             replies, _, _ = interact(
-                is_student,
-                texts,
-                problem,
-                1,
-                data_type,
-                generator_client if is_student else teacher_client,
-                generator_name if is_student else teacher_name,
-                generator_temperature if is_student else teacher_temperature,
-                use_scaffold,
+                True, texts, problem, 1, data_type,
+                generator_client, generator_name, generator_temperature, use_scaffold,
             )
             texts.append(replies[0])
 
+            # Teacher reply (the question of the last turn is not answered)
+            if turn < total_turns:
+                replies, _, _ = interact(
+                    False, texts, problem, 1, data_type,
+                    teacher_client, teacher_name, teacher_temperature, use_scaffold,
+                )
+                texts.append(replies[0])
+
         # Save transcript (labelled with generator name as student role)
-        edited_msgs = [
-            {"role": generator_name if (i % 2 == 1) else teacher_name, "turn": i, "content": t}
-            for i, t in enumerate(texts)
-        ]
+        edited_msgs = transcript_messages(texts, generator_name, teacher_name)
         save_json_atomic(transcript_path, edited_msgs)
 
         return pass_at_k_scores, generations

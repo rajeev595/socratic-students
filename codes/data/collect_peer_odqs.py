@@ -113,8 +113,8 @@ def run_problem(
     num_candidates_peer: int,
     # schedule
     assessment_turn: int,
-    start_from_turn: int = 1,
-    total_turns: int = 10,
+    start_from_turn: int = 0,
+    total_turns: int = 5,
     eps: float = 0.2,
     use_scaffold: bool = False,
     is_ood: bool = False,
@@ -143,12 +143,12 @@ def run_problem(
         total_guide_prompt_tks = total_guide_completion_tks = 0
 
         # Initialize / resume
-        if start_from_turn <= 1:
+        if start_from_turn <= 0:
             texts: List[Any] = [_problem_greeting(data_type)]
-            cur_start = 1
+            cur_start = 0
         else:
             texts = ["Hi there! Let's pick up the conversation."]
-            cur_start = 1
+            cur_start = 0
             logger.warning(f"[{pid}] resume requested but no transcript found; starting fresh")
 
         pairs: List[Dict[str, Any]] = []
@@ -159,10 +159,10 @@ def run_problem(
         last_baseline_scores: Dict[Any, float] = {}
         last_baseline_valid = False
 
-        for turn in range(cur_start, total_turns, 2):
+        for turn in range(cur_start, total_turns):
             # Optional assessment injected into previous text
             assessment_injected = False
-            if assessment_turn > 0 and turn == assessment_turn and len(texts) > 0:
+            if assessment_turn >= 0 and turn == assessment_turn and len(texts) > 0:
                 texts[-1] += get_assessment(
                     data_type=data_type,
                     student_client=student_client,

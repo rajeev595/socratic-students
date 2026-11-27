@@ -4,16 +4,16 @@
 #   STUDENT=qwen7 DOMAIN=math bash scripts/5_ablations.sh
 source "$(dirname "$0")/common.sh"
 
-# --- Assessment position: one assessment inserted at paper turn t = 0..5 (unscaffolded) ---------
+# --- Assessment position: one assessment inserted at turn t = 0..5 (unscaffolded) ---------------
 for t in 0 1 2 3 4 5; do
-  python -m codes.run_interact $TEST experiment.name=assessment_turn_$t experiment.assessment_turn=$((2 * t + 1))
+  python -m codes.run_interact $TEST experiment.name=assessment_turn_$t experiment.assessment_turn=$t
 done
 
 # --- Generator vs. solver: who benefits from ODQS training? --------------------------------------
 # The same student model plays two roles: it asks the questions (generator) and it answers the
 # problem for Pass@k (solver). Here the two roles use different weights.
 CKPT=$(best_ckpt "$(ckpt_dir self_odqs dpo)")
-T=$(( (ASSESSMENT_TURN - 1) / 2 ))   # paper turn of the assessment used below (0 for math, 2 for code)
+T=$ASSESSMENT_TURN   # turn of the assessment used below (0 for math, 2 for code)
 CROSS="$TEST student.gpus=[4,5] evaluator.model=$STUDENT evaluator.gpus=[6,7] experiment.assessment_turn=$ASSESSMENT_TURN"
 
 # Qgen: ODQS-trained generator, untrained solver

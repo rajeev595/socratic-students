@@ -100,7 +100,7 @@ def _extract_student_texts(transcript: List[Dict[str, Any]]) -> List[str]:
 def _extract_teacher_texts(transcript: List[Dict[str, Any]]) -> List[tuple]:
     """
     Returns a list of (teacher_reply, preceding_student_message) tuples.
-    Teacher instructional turns are at even indices >= 2 (turns 2, 4, 6, ...).
+    Entry t is the teacher's reply to the student question of turn t (messages 2, 4, 6, ... of the transcript).
     The preceding student message is always at index i-1.
     """
     result = []
@@ -167,7 +167,7 @@ def _per_turn_bootstrap(
         vals = [float(v) for v in col[use]]
         stats = _bootstrap_mean_std(vals, num_samples=num_samples, seed=seed)
         out.append({
-            "turn": 2 * t + 1,
+            "turn": t,
             "n": stats["n"],
             "mean": stats["mean"],
             "std": stats["std"],
@@ -276,18 +276,16 @@ def get_improvement_matrix(
     mask = []
     for pid in problems:
         pid = str(pid)
-        # how many odd turns exist in results?
-        # we infer via baseline (assumed same across compare)
-        # keys are strings "1","3","5",...
+        # turns present in the results (keys are strings "0", "1", "2", ...)
         turns = sorted(
             [int(t) for t in baseline_results[pid]["results"].keys()],
             key=int
         )
-        # Skip turn 1 (no question has been asked yet)
-        # Keep that behavior:
+        # Skip turn 0: no question has been asked yet, so nothing can have improved.
+        # Column j therefore says whether the question of turn j improved Pass@k at turn j + 1.
         row = []
         for t in turns:
-            if t == 1:  # skip first odd turn to match earlier convention
+            if t == 0:
                 continue
             tk = str(k)
             base_k = baseline_results[pid]["results"][str(t)][tk]
@@ -295,7 +293,7 @@ def get_improvement_matrix(
             row.append(1.0 if (comp_k - base_k) >= 1.0 else 0.0)
         mask.append(row)
 
-    # N x T' (T' may be #odd_turns-1 if skipping turn-1)
+    # N x T' with T' = number of turns - 1
     return np.array(mask, dtype=float)
 
 
@@ -378,7 +376,7 @@ def analyze_problem(
 
         per_turn.append(
             {
-                "turn": 2*t_idx + 1,
+                "turn": t_idx,
                 "progress": progress,
                 "confidence": confidence,
                 "raw": raw,  # keep for audit; remove if large
@@ -402,7 +400,7 @@ def analyze_leakage(
     """
     For one problem:
       - Load transcript
-      - Extract teacher instructional turns (even turns >= 2)
+      - Extract the teacher's replies (one per turn)
       - Judge leakage per teacher turn
     Returns:
       {
@@ -461,7 +459,7 @@ def analyze_leakage(
 
         per_turn.append(
             {
-                "turn": 2 * (t_idx + 1),  # teacher turns: 2, 4, 6, ...
+                "turn": t_idx,  # reply to the student question of turn t_idx
                 "leakage": leakage,
                 "confidence": confidence,
                 "raw": raw,
@@ -536,7 +534,7 @@ def similarity_rank_judge(
     Builds one ranking row per compare-turn.
     Returns a dict with:
       - problem_id
-      - baseline_ids: list[int]   # odd turn ids for baseline (1,3,5,...)
+      - baseline_ids: list[int]   # turn of each baseline question (0, 1, 2, ...)
       - rows: list[ {compare_turn, ranking, scores, top_id, top_justification, (raw?)} ]
       - top1: list[int]           # top_id per row (None filtered out)
       - implied_matrix: Optional[List[List[float]]]  # [T, T] if 'scores' present for all rows
@@ -553,8 +551,8 @@ def similarity_rank_judge(
             "rows": []
         }
 
-    # Baseline candidate ids: 1,3,5,...
-    base_ids = [2 * j + 1 for j in range(len(baseline_turns))]
+    # Baseline candidate ids = the turn each baseline question was asked at: 0, 1, 2, ...
+    base_ids = list(range(len(baseline_turns)))
     candidates = list(zip(base_ids, baseline_turns))
 
     rows = []
@@ -585,10 +583,10 @@ def similarity_rank_judge(
         for bid in base_ids:
             if bid not in ranking:
                 ranking.append(bid)
-                logger.info(f"[LLM-Rank] Missing baseline id {bid} in ranking for problem {pid}, turn {2*idx+1}")
+                logger.info(f"[LLM-Rank] Missing baseline id {bid} in ranking for problem {pid}, turn {idx}")
 
         row_payload = {
-            "compare_turn": 2 * idx + 1,
+            "compare_turn": idx,
             "ranking": ranking,
             "justification": just,
         }
@@ -680,8 +678,7 @@ def run_progress(cfg: DictConfig) -> None:
     vals = np.full((len(pids), max_T), np.nan, dtype=float)
     for i, pid in enumerate(pids):
         for entry in all_results.get(pid, {}).get("turns", []):
-            t = int(entry["turn"])
-            idx = (t - 1) // 2
+            idx = int(entry["turn"])
             prog = entry.get("progress")
             if isinstance(prog, (int, float)):
                 vals[i, idx] = float(prog)
@@ -831,7 +828,7 @@ def run_similarity_embedding(cfg: DictConfig) -> None:
 
     fig, ax = plt.subplots(figsize=(5, 4))
     im = ax.imshow(avg_M_all, vmin=0, vmax=1, cmap="YlGn")
-    turns = list(range(1, avg_M_all.shape[0] * 2, 2))
+    turns = list(range(avg_M_all.shape[0]))
     ax.set_xticks(np.arange(avg_M_all.shape[1])); ax.set_xticklabels(turns)
     ax.set_yticks(np.arange(avg_M_all.shape[0])); ax.set_yticklabels(turns)
     ax.set_xlabel(rf"\textbf{{{baseline_name}}} turn ($j$)")
@@ -870,7 +867,7 @@ def run_similarity_embedding(cfg: DictConfig) -> None:
 
     fig, ax = plt.subplots(figsize=(5, 4))
     im = ax.imshow(avg_M_imp, vmin=0, vmax=1, cmap="YlGn")
-    turns = list(range(1, avg_M_imp.shape[0] * 2, 2))
+    turns = list(range(avg_M_imp.shape[0]))
     ax.set_xticks(np.arange(avg_M_imp.shape[1])); ax.set_xticklabels(turns)
     ax.set_yticks(np.arange(avg_M_imp.shape[0])); ax.set_yticklabels(turns)
     ax.set_xlabel(rf"\textbf{{{baseline_name}}} turn ($j$)")
@@ -1020,7 +1017,7 @@ def run_similarity_judge(cfg: DictConfig) -> None:
 
     fig, ax = plt.subplots(figsize=(5, 4))
     im = ax.imshow(avg_M_all, vmin=0, vmax=1, cmap="YlGn")
-    turns = list(range(1, avg_M_all.shape[0]*2, 2))
+    turns = list(range(avg_M_all.shape[0]))
     ax.set_xticks(np.arange(avg_M_all.shape[1])); ax.set_xticklabels(turns)
     ax.set_yticks(np.arange(avg_M_all.shape[0])); ax.set_yticklabels(turns)
     ax.set_xlabel(rf"\textbf{{{baseline_name}}} turn ($j$)")
@@ -1059,7 +1056,7 @@ def run_similarity_judge(cfg: DictConfig) -> None:
 
     fig, ax = plt.subplots(figsize=(5, 4))
     im = ax.imshow(avg_M_imp, vmin=0, vmax=1, cmap="YlGn")
-    turns = list(range(1, avg_M_imp.shape[0]*2, 2))
+    turns = list(range(avg_M_imp.shape[0]))
     ax.set_xticks(np.arange(avg_M_imp.shape[1])); ax.set_xticklabels(turns)
     ax.set_yticks(np.arange(avg_M_imp.shape[0])); ax.set_yticklabels(turns)
     ax.set_xlabel(rf"\textbf{{{baseline_name}}} turn ($j$)")
@@ -1194,7 +1191,7 @@ def run_similarity_judge_ranking(cfg: DictConfig) -> None:
 
     fig, ax = plt.subplots(figsize=(5, 4))
     im = ax.imshow(avg_M_all, vmin=0, vmax=1, cmap="YlGn")
-    turns = list(range(1, avg_M_all.shape[0]*2, 2))
+    turns = list(range(avg_M_all.shape[0]))
     ax.set_xticks(np.arange(avg_M_all.shape[1])); ax.set_xticklabels(turns)
     ax.set_yticks(np.arange(avg_M_all.shape[0])); ax.set_yticklabels(turns)
     ax.set_xlabel(rf"\textbf{{{baseline_name}}} turn ($j$)")
@@ -1233,7 +1230,7 @@ def run_similarity_judge_ranking(cfg: DictConfig) -> None:
 
     fig, ax = plt.subplots(figsize=(5, 4))
     im = ax.imshow(avg_M_imp, vmin=0, vmax=1, cmap="YlGn")
-    turns = list(range(1, avg_M_imp.shape[0]*2, 2))
+    turns = list(range(avg_M_imp.shape[0]))
     ax.set_xticks(np.arange(avg_M_imp.shape[1])); ax.set_xticklabels(turns)
     ax.set_yticks(np.arange(avg_M_imp.shape[0])); ax.set_yticklabels(turns)
     ax.set_xlabel(rf"\textbf{{{baseline_name}}} turn ($j$)")
@@ -1328,13 +1325,12 @@ def run_leakage(cfg: DictConfig) -> None:
             pid = futures[fut]
             all_results[pid] = fut.result()
 
-    # --- build [N, T] leakage array (teacher turns: 2, 4, 6, ...) ---
+    # --- build [N, T] leakage array (one column per turn) ---
     max_T = max(len(all_results[pid]["turns"]) for pid in pids if "turns" in all_results.get(pid, {}))
     vals = np.full((len(pids), max_T), np.nan, dtype=float)
     for i, pid in enumerate(pids):
         for entry in all_results.get(pid, {}).get("turns", []):
-            t = int(entry["turn"])
-            idx = t // 2 - 1  # teacher turns 2→0, 4→1, 6→2, ...
+            idx = int(entry["turn"])
             leak = entry.get("leakage")
             if isinstance(leak, (int, float)):
                 vals[i, idx] = float(leak)
@@ -1422,7 +1418,7 @@ def _classify_qtypes_problem(
     return {
         "problem_id": pid,
         "turns": [
-            {"turn": 2 * i + 1, "type": types[i], "justification": justifications[i]}
+            {"turn": i, "type": types[i], "justification": justifications[i]}
             for i in range(len(types))
         ],
     }
@@ -1706,12 +1702,10 @@ def run_question_type(cfg: DictConfig) -> None:
         by_turn: Dict[int, List[str]] = {}
         for pid in pids:
             for entry in results.get(pid, {}).get("turns", []):
-                t_idx = (int(entry["turn"]) - 1) // 2
-                by_turn.setdefault(t_idx, []).append(entry["type"])
+                by_turn.setdefault(int(entry["turn"]), []).append(entry["type"])
         dist = {}
-        for t_idx, type_list in sorted(by_turn.items()):
+        for turn_id, type_list in sorted(by_turn.items()):
             n = len(type_list)
-            turn_id = 2 * t_idx + 1
             dist[turn_id] = {t: round(type_list.count(t) / n, 4) for t in TYPE_LABELS}
             dist[turn_id]["n"] = n
         return dist

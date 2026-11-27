@@ -170,3 +170,22 @@ def format_messages(texts: List[str], starting_with_user: bool) -> List[Dict[str
         msgs.append({"role": role, "content": text})
         role = "assistant" if role == "user" else "user"
     return msgs
+
+
+def transcript_messages(texts, student_name: str, teacher_name: str):
+    """
+    Label the messages of a conversation for saving.
+
+    A conversation is the teacher's greeting followed by one (student question, teacher reply)
+    pair per turn. Every message records its position (`index`) and the turn it belongs to
+    (`turn`, as in the paper: 0, 1, 2, ...; None for the greeting).
+    """
+    messages = []
+    for index, text in enumerate(texts):
+        messages.append({
+            "role": student_name if (index % 2 == 1) else teacher_name,
+            "index": index,
+            "turn": None if index == 0 else (index - 1) // 2,
+            "content": text,
+        })
+    return messages
