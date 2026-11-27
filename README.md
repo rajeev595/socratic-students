@@ -1,7 +1,7 @@
 # Socratic Students: Training Language Models to Ask Better Questions for Reasoning
 
 Code for the paper **"Socratic Students: Training Language Models to Ask Better Questions for Reasoning"**
-(Rajeev Bhatt Ambati\*, Tianyi Niu\*, Aashu Singh, Shlok Mishra, Snigdha Chaturvedi, Shashank Srivastava; EACL).
+(Rajeev Bhatt Ambati\*, Tianyi Niu\*, Aashu Singh, Shlok Mishra, Snigdha Chaturvedi, Shashank Srivastava; Findings of EACL).
 
 A *student* model works on a math or coding problem and may ask a stronger *teacher* model a small
 number of questions. The teacher gives guidance but not the answer. After every teacher reply we
@@ -239,18 +239,18 @@ that compute agreement, correlations and win rates from the downloaded results.
 
 ```
 data/<teacher>/<dataset>/
-  splits_0.5/<student>_{train,val,test}.json     curated problems: [{id, prompt, solution, ...}]
-  odqs/<student>_dpo_iter0_{train,val}.jsonl     Self-ODQS preference pairs
-  odqs/<student>__<peer>__dpo_iter0_*.jsonl      Peer-ODQS preference pairs
-  odqs/*_sft_*.jsonl, *_grpo_*.jsonl             chosen questions / all scored candidates per turn
+  splits_0.5/<student>_{train,val,test}.json     # curated problems: [{id, prompt, solution, ...}]
+  odqs/<student>_dpo_iter0_{train,val}.jsonl     # Self-ODQS preference pairs
+  odqs/<student>__<peer>__dpo_iter0_*.jsonl      # Peer-ODQS preference pairs
+  odqs/*_sft_*.jsonl, *_grpo_*.jsonl             # chosen questions / all scored candidates per turn
 
 experiments/<name>/<teacher>/<student>/<dataset>/
-  transcripts_0/<problem id>.json                [{role, index, turn, content}, ...]
-  itemized_results_0.json                        {problem id: {results: {turn: {k: Pass@k}}, generations: ...}}
-  aggregate_results_0.json                       {turn: {k: [bootstrapped mean, std]}}
-  dpo_0/checkpoint-*/                            LoRA checkpoints (training runs only)
-  analysis/                                      outputs of codes.run_analysis
-  *.log, config.yaml, overrides.yaml             Hydra logs and the exact configuration of the last run
+  transcripts_0/<problem id>.json                # [{role, index, turn, content}, ...]
+  itemized_results_0.json                        # {problem id: {results: {turn: {k: Pass@k}}, generations: ...}}
+  aggregate_results_0.json                       # {turn: {k: [bootstrapped mean, std]}}
+  dpo_0/checkpoint-*/                            # LoRA checkpoints (training runs only)
+  analysis/                                      # outputs of codes.run_analysis
+  *.log, config.yaml, overrides.yaml             # Hydra logs and the exact configuration of the last run
 ```
 
 A preference pair is one JSON object per line:
@@ -306,30 +306,30 @@ Details of what the code does, for anyone comparing against the paper's descript
 ## Repository layout
 
 ```
-configs/config.yaml               all settings
-problem_ids/                      ids of the problems in every train / val / test split used in the paper
-scripts/                          one script per pipeline stage (see above)
+configs/config.yaml               # all settings
+problem_ids/                      # ids of the problems in every train / val / test split used in the paper
+scripts/                          # one script per pipeline stage (see above)
 codes/
-  run_interact.py                 student-teacher interaction with per-turn evaluation
-  run_sft_dpo.py                  ODQS training (optional SFT, then DPO)
-  run_cross_eval.py               generator-vs-solver ablation
-  run_analysis.py                 LLM-judge analyses
-  plot_results.py                 main result figures and tables
-  plot_ablations.py               progress, assessment position, teacher size
+  run_interact.py                 # student-teacher interaction with per-turn evaluation
+  run_sft_dpo.py                  # ODQS training (optional SFT, then DPO)
+  run_cross_eval.py               # generator-vs-solver ablation
+  run_analysis.py                 # LLM-judge analyses
+  plot_results.py                 # main result figures and tables
+  plot_ablations.py               # progress, assessment position, teacher size
   plot_cross_eval.py, plot_qtype.py
-  significance.py                 paired-bootstrap significance tests
+  significance.py                 # paired-bootstrap significance tests
   data/
-    build_splits.py               rebuild the paper's problem sets from problem_ids/
-    math/sample_hard.py           curate GSM8K problems
-    code/sample_hard.py           curate HumanEval + OpenCoder problems
-    collect_self_odqs.py          Self-ODQS preference collection
-    collect_peer_odqs.py          Peer-ODQS preference collection
+    build_splits.py               # rebuild the paper's problem sets from problem_ids/
+    math/sample_hard.py           # curate GSM8K problems
+    code/sample_hard.py           # curate HumanEval + OpenCoder problems
+    collect_self_odqs.py          # Self-ODQS preference collection
+    collect_peer_odqs.py          # Peer-ODQS preference collection
     collect_rejection_sampling.py LLM-judge baseline data
-  prompts/                        every prompt used (student, teacher, assessment, judges)
-  evaluation/                     answer generation and checking, Pass@k, bootstrap
-  human_eval/                     MTurk sampling, HIT templates, analysis
-  utils/                          model servers, chat wrapper, file helpers
-  experimental/                   not used in the paper, see below
+  prompts/                        # every prompt used (student, teacher, assessment, judges)
+  evaluation/                     # answer generation and checking, Pass@k, bootstrap
+  human_eval/                     # MTurk sampling, HIT templates, analysis
+  utils/                          # model servers, chat wrapper, file helpers
+  experimental/                   # not used in the paper, see below
 ```
 
 `codes/experimental/` holds two things we tried and did not use: a GRPO-style trainer over the scored
@@ -352,7 +352,7 @@ OpenCoder, which are released under the MIT License by their authors.
 @inproceedings{ambati-niu-socratic-students,
   title     = {Socratic Students: Training Language Models to Ask Better Questions for Reasoning},
   author    = {Ambati, Rajeev Bhatt and Niu, Tianyi and Singh, Aashu and Mishra, Shlok and Chaturvedi, Snigdha and Srivastava, Shashank},
-  booktitle = {Proceedings of the Conference of the European Chapter of the Association for Computational Linguistics (EACL)},
+  booktitle = {Findings of the Association for Computational Linguistics: EACL},
   note      = {To appear}
 }
 ```
